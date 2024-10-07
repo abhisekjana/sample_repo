@@ -1,1 +1,9 @@
-In the last decade, large language models (LLMs) have revolutionized many domains, transforming how we interact with technology and redefining the boundaries of artificial intelligence. This breakthrough can largely be attributed to significant advancements in computational power, the availability of vast amounts of data, and innovations in deep learning architectures.
+M4 Dataset for Time Series Forecasting: Overview
+The M4 Dataset is one of the most widely used and comprehensive datasets for benchmarking time series forecasting models. Released as part of the M4 competition, it contains 100,000 time series from various domains, making it a valuable resource for testing and improving forecasting methods.
+
+Key Features:
+
+Diverse Data: Includes data from different categories such as finance, demographics, industry, macroeconomics, and others.
+Granular Time Intervals: Time series cover multiple frequencies (e.g., yearly, quarterly, monthly, weekly, daily, hourly), allowing models to handle various temporal patterns.
+Real-World Application: The dataset reflects real-world challenges like seasonality, trend, and noise, making it suitable for training robust models.
+Impact: The M4 competition has driven innovation in forecasting techniques, including hybrid models, statistical methods, and machine learning approaches. It remains a key benchmark in evaluating the accuracy and performance of time series models.
