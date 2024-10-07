@@ -1,6 +1,56 @@
-a. For Change Point Detection:
-You could use the encoder outputs (e.g., hidden states from the model) and fine-tune on a labeled dataset with known change points.
-Alternatively, use techniques like density estimation or statistical tests on the learned embeddings to spot significant shifts.
-b. For Anomaly Detection:
-Use the model’s forecasting residuals (the difference between the actual and predicted values) as indicators for anomalies. Large residuals would signal potential anomalies.
-Fine-tune a classifier based on the hidden states of your encoder to recognize anomalous sequences by using a threshold-based method or clustering methods.
+import pandas as pd
+import holidays
+import torch
+
+def create_holiday_flags(df, column_name, country='US'):
+    """
+    Create holiday flags for a specific date column in a dataframe using the holidays package.
+    
+    Args:
+    - df (pd.DataFrame): DataFrame containing the date column.
+    - column_name (str): Name of the column containing dates.
+    - country (str): Country code for holidays (default is 'US').
+    
+    Returns:
+    - holiday_flag_tensor (torch.LongTensor): Tensor with holiday flags (0 for non-holiday, 1+ for holidays).
+    - holiday_mapping (dict): Mapping of holiday names to integer flags.
+    """
+    # Ensure the column contains datetime objects
+    if not pd.api.types.is_datetime64_any_dtype(df[column_name]):
+        df[column_name] = pd.to_datetime(df[column_name])
+    
+    # Generate holidays for the given country and years in the date column
+    years_in_data = df[column_name].dt.year.unique()
+    country_holidays = holidays.CountryHoliday(country, years=years_in_data)
+
+    # Initialize the holiday flag with zeros (non-holiday)
+    holiday_flag = [0] * len(df)
+
+    # Create a mapping of holiday names to unique integer values
+    holiday_mapping = {}
+    holiday_id = 1
+    
+    # Iterate through the dataframe and assign holiday flags
+    for i, date in enumerate(df[column_name]):
+        if date in country_holidays:
+            holiday_name = country_holidays.get(date)
+            if holiday_name not in holiday_mapping:
+                holiday_mapping[holiday_name] = holiday_id
+                holiday_id += 1
+            holiday_flag[i] = holiday_mapping[holiday_name]
+
+    # Convert to tensor for input
+    holiday_flag_tensor = torch.LongTensor(holiday_flag)
+
+    return holiday_flag_tensor, holiday_mapping
+
+# Example usage: DataFrame with a date column
+data = {
+    'date': ['2023-01-01', '2023-01-15', '2023-01-16', '2023-02-20', '2023-12-25']
+}
+df = pd.DataFrame(data)
+
+holiday_flag_tensor, holiday_mapping = create_holiday_flags(df, 'date')
+
+print("Holiday Flag Tensor:\n", holiday_flag_tensor)
+print("\nHoliday Mapping:\n", holiday_mapping)
