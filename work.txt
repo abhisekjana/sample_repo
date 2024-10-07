@@ -1,1 +1,6 @@
-Using the GPT architecture for a Time Series Foundation model makes sense because of its autoregressive nature. Time series forecasting requires predicting future values based on past observations, and GPT's autoregressive design aligns perfectly with this. GPT generates the next token (or time step) by conditioning on all previous inputs, making it ideal for sequential data like time series. 
+a. For Change Point Detection:
+You could use the encoder outputs (e.g., hidden states from the model) and fine-tune on a labeled dataset with known change points.
+Alternatively, use techniques like density estimation or statistical tests on the learned embeddings to spot significant shifts.
+b. For Anomaly Detection:
+Use the model’s forecasting residuals (the difference between the actual and predicted values) as indicators for anomalies. Large residuals would signal potential anomalies.
+Fine-tune a classifier based on the hidden states of your encoder to recognize anomalous sequences by using a threshold-based method or clustering methods.
