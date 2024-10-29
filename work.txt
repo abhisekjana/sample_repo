@@ -1,35 +1,31 @@
-| XGBoost Parameter     | Equivalent LightGBM Parameter    | Notes                                                                                                  |
-| --------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| n_estimators          | num_iterations / num_boost_round | Both define the number of boosting rounds.                                                             |
-| learning_rate         | learning_rate                    | Same purpose; controls the contribution of each tree.                                                  |
-| max_depth             | max_depth                        | Same purpose; max depth of trees. LightGBM can have unlimited depth by default (\-1).                  |
-| min_child_weight      | min_child_samples                | Minimum data points in a leaf (XGBoost) vs. minimum samples in a leaf (LightGBM).                      |
-| gamma                 | min_split_gain                   | Minimum loss reduction required to make a split.                                                       |
-| subsample             | bagging_fraction                 | Both control the fraction of samples used per tree.                                                    |
-| colsample_bytree      | feature_fraction                 | Fraction of features (columns) used per tree.                                                          |
-| colsample_bylevel     | feature_fraction_bynode          | Feature fraction used per tree level (XGBoost) vs. per node (LightGBM).                                |
-| colsample_bynode      | feature_fraction_bynode          | Same purpose; fraction of features used per node in each split.                                        |
-| lambda (reg_lambda)   | lambda_l2                        | L2 regularization.                                                                                     |
-| alpha (reg_alpha)     | lambda_l1                        | L1 regularization.                                                                                     |
-| scale_pos_weight      | is_unbalance or scale_pos_weight | Use is_unbalance (binary only) or scale_pos_weight (multiclass) to handle imbalanced classes.          |
-| max_delta_step        | No direct equivalent             | XGBoost-only parameter; stabilizes the update step for highly imbalanced classes.                      |
-| tree_method           | boosting_type                    | Use boosting_type="goss" in LightGBM for Gradient-Based One-Side Sampling, similar to hist in XGBoost. |
-| objective             | objective                        | Both have similar objectives (e.g., binary, regression, multiclass).                                   |
-| eval_metric           | metric                           | Both use evaluation metrics but LightGBM defaults may vary.                                            |
-| early_stopping_rounds | early_stopping_round             | Same purpose; stops training if no improvement over specified rounds.                                  |
-| random_state / seed   | seed                             | Controls the random number generator for reproducibility.                                              |
-| verbosity             | verbosity or silent              | Controls logging output level; LightGBM uses 0 for no output.                                          |
-| monotone_constraints  | monotone_constraints             | Both frameworks support monotonic constraints on features.                                             |
-| gpu_id                | device                           | Set to gpu in LightGBM for GPU training (use GPU parameters).                                          |
+| XGBoost Parameter     | LightGBM Parameter               | Description & Usage                                                                                                                   | Typical Ranges/Accepted Values                                                            |
+| --------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| n_estimators          | num_iterations / num_boost_round | Number of boosting rounds or estimators.                                                                                              | Integer, usually between 100–1000.                                                        |
+| learning_rate         | learning_rate                    | Controls the contribution of each tree.                                                                                               | 0.01–0.3; lower values often with higher n_estimators.                                    |
+| max_depth             | max_depth                        | Maximum depth of trees. Deeper trees can model more complex relationships.                                                            | Integer; typically 3–10. XGBoost default: 6, LightGBM default: -1 (no limit).             |
+| min_child_weight      | min_child_samples                | Minimum data points in a leaf (XGBoost) vs. minimum samples in a leaf (LightGBM).                                                     | XGBoost: 1–10; LightGBM: 5–20.                                                            |
+| gamma                 | min_split_gain                   | Minimum loss reduction required to make a split.                                                                                      | 0–1 (or higher). Default 0.                                                               |
+| subsample             | bagging_fraction                 | Fraction of samples used per tree to prevent overfitting.                                                                             | 0.5–1. Default is often 0.8.                                                              |
+| colsample_bytree      | feature_fraction                 | Fraction of features used per tree.                                                                                                   | 0.5–1. Default is often 0.8.                                                              |
+| colsample_bylevel     | feature_fraction_bynode          | Fraction of features (columns) used per tree level (XGBoost) vs. per node (LightGBM).                                                 | 0.5–1.                                                                                    |
+| colsample_bynode      | feature_fraction_bynode          | Fraction of features used per node in each split.                                                                                     | 0.5–1. Default often 0.8.                                                                 |
+| lambda (reg_lambda)   | lambda_l2                        | L2 regularization (prevents overfitting by adding penalty for high values).                                                           | 0–1 or higher; LightGBM default: 0.                                                       |
+| alpha (reg_alpha)     | lambda_l1                        | L1 regularization (adds penalty for non-zero weights).                                                                                | 0–1 or higher; LightGBM default: 0.                                                       |
+| scale_pos_weight      | is_unbalance or scale_pos_weight | Handles imbalanced classes. In LightGBM, is_unbalance only works for binary classification, while scale_pos_weight is for multiclass. | Typically ratio of negative to positive classes.                                          |
+| max_delta_step        | No direct equivalent             | Helps stabilize the update step for highly imbalanced classes.                                                                        | Integer, typically 0–10.                                                                  |
+| tree_method           | boosting_type                    | Defines boosting type. Use boosting_type="goss" in LightGBM to approximate hist in XGBoost.                                           | "hist", "exact", "approx" in XGBoost; "gbdt", "dart", "goss", "rf" in LightGBM.           |
+| objective             | objective                        | Sets the learning task (e.g., regression, binary classification, multiclass classification).                                          | "reg:squarederror", "binary:logistic", etc., in XGBoost; LightGBM has similar objectives. |
+| eval_metric           | metric                           | Specifies evaluation metric (e.g., "rmse", "logloss").                                                                                | "rmse", "mae", "logloss", etc.                                                            |
+| early_stopping_rounds | early_stopping_round             | Stops training if no improvement in the evaluation metric is observed over the specified rounds.                                      | Integer, 10–100.                                                                          |
+| random_state / seed   | seed                             | Controls the random number generator for reproducibility.                                                                             | Integer seed.                                                                             |
+| verbosity             | verbosity or silent              | Controls logging output level (LightGBM uses 0 for no output).                                                                        | 0 (silent), 1 (warning), 2 (info), 3 (debug).                                             |
+| monotone_constraints  | monotone_constraints             | Sets monotonic constraints on feature splits (enforces an increasing or decreasing relationship between features and target).         | List of 1s, -1s, or 0s; length = # features.                                              |
+| gpu_id                | device                           | Set to "gpu" in LightGBM for GPU training.                                                                                            | "gpu" or "cpu" in LightGBM; gpu_id is integer ID in XGBoost.                              |
 
+## Additional LightGBM Parameters without Direct XGBoost Equivalents
 
-
-
-
-
-
-
-
-boost_from_average: Starts boosting from the average value of each class.
-min_gain_to_split: Minimum gain required to split a node; works similarly to gamma in XGBoost.
-num_leaves: Controls the maximum number of leaves in LightGBM, similar to max_depth.
+| LightGBM Parameter | Description                                                                                                           | Typical Ranges/Accepted Values                     |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| boost_from_average | Starts boosting from the average value of each class.                                                                 | True/False.                                        |
+| min_gain_to_split  | Minimum gain required to make a split, similar to gamma in XGBoost but slightly different.                            | 0–1 or higher.                                     |
+| num_leaves         | Controls the maximum number of leaves in LightGBM. Higher values increase model complexity and potential overfitting. | Typically 2^(max_depth), but often between 31–256. |
