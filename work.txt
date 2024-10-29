@@ -1,6 +1,35 @@
-sMAPE (Symmetric Mean Absolute Percentage Error) is a widely used metric for evaluating the accuracy of time series forecasting models. It measures the relative difference between the actual values and the forecasted values, expressed as a percentage. Unlike traditional Mean Absolute Percentage Error (MAPE), sMAPE is symmetric, meaning it penalizes over-forecasting and under-forecasting equally. The formula for sMAPE is:
+| XGBoost Parameter     | Equivalent LightGBM Parameter    | Notes                                                                                                  |
+| --------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| n_estimators          | num_iterations / num_boost_round | Both define the number of boosting rounds.                                                             |
+| learning_rate         | learning_rate                    | Same purpose; controls the contribution of each tree.                                                  |
+| max_depth             | max_depth                        | Same purpose; max depth of trees. LightGBM can have unlimited depth by default (\-1).                  |
+| min_child_weight      | min_child_samples                | Minimum data points in a leaf (XGBoost) vs. minimum samples in a leaf (LightGBM).                      |
+| gamma                 | min_split_gain                   | Minimum loss reduction required to make a split.                                                       |
+| subsample             | bagging_fraction                 | Both control the fraction of samples used per tree.                                                    |
+| colsample_bytree      | feature_fraction                 | Fraction of features (columns) used per tree.                                                          |
+| colsample_bylevel     | feature_fraction_bynode          | Feature fraction used per tree level (XGBoost) vs. per node (LightGBM).                                |
+| colsample_bynode      | feature_fraction_bynode          | Same purpose; fraction of features used per node in each split.                                        |
+| lambda (reg_lambda)   | lambda_l2                        | L2 regularization.                                                                                     |
+| alpha (reg_alpha)     | lambda_l1                        | L1 regularization.                                                                                     |
+| scale_pos_weight      | is_unbalance or scale_pos_weight | Use is_unbalance (binary only) or scale_pos_weight (multiclass) to handle imbalanced classes.          |
+| max_delta_step        | No direct equivalent             | XGBoost-only parameter; stabilizes the update step for highly imbalanced classes.                      |
+| tree_method           | boosting_type                    | Use boosting_type="goss" in LightGBM for Gradient-Based One-Side Sampling, similar to hist in XGBoost. |
+| objective             | objective                        | Both have similar objectives (e.g., binary, regression, multiclass).                                   |
+| eval_metric           | metric                           | Both use evaluation metrics but LightGBM defaults may vary.                                            |
+| early_stopping_rounds | early_stopping_round             | Same purpose; stops training if no improvement over specified rounds.                                  |
+| random_state / seed   | seed                             | Controls the random number generator for reproducibility.                                              |
+| verbosity             | verbosity or silent              | Controls logging output level; LightGBM uses 0 for no output.                                          |
+| monotone_constraints  | monotone_constraints             | Both frameworks support monotonic constraints on features.                                             |
+| gpu_id                | device                           | Set to gpu in LightGBM for GPU training (use GPU parameters).                                          |
 
-sMAPE is bounded between 0% and 200%, with lower values indicating better model performance. It is especially useful for datasets where the scale of the time series can vary, as it normalizes the error b
-y the magnitude of the values. However, it can be sensitive to small actual values, which may inflate the percentage error.
 
-"I had the pleasure of working with [Coworker's Name] during our recent hackathon, and her contributions were outstanding. As a proactive and highly skilled UI developer, she not only completed the UI but also added several features that significantly enhanced our project. She demonstrated excellent collaboration throughout, providing continuous support to the team and ensuring we stayed on track. Additionally, she recorded an amazing demo that showcased our project beautifully. Her responsibility and diligence in completing all assigned objectives made her an invaluable team member. I would absolutely love the opportunity to work with her again in the future!"
+
+
+
+
+
+
+
+boost_from_average: Starts boosting from the average value of each class.
+min_gain_to_split: Minimum gain required to split a node; works similarly to gamma in XGBoost.
+num_leaves: Controls the maximum number of leaves in LightGBM, similar to max_depth.
