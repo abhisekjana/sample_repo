@@ -1,27 +1,13 @@
-Agent: The LLM itself, acting as the policy network, initialized from a pre-trained or supervised fine-tuned (SFT) model, with the goal of generating text that maximizes a reward signal.
+The reward model in RLHF (Reinforcement Learning from Human Feedback) is typically a transformer-based neural network trained to predict human preferences. Its architecture includes:
 
-State: The current context (text prompt + generated tokens so far), represented as a sequence of tokens (e.g., "User: What is RL? Assistant: ...").
+Base Model: Initialized from a pre-trained language model (e.g., a smaller version of the policy model) to leverage general language understanding.
 
-Actions: The next token predicted by the LLM, with the action space being the model’s vocabulary (e.g., 50k tokens).
+Regression Head: A final linear layer added on top of the base model, which outputs a scalar reward score for a given (prompt, response) pair.
 
-Policy: The LLM’s parameterized strategy for selecting tokens (actions), represented by its transformer architecture, updated via RL algorithms (e.g., PPO) to maximize reward.
+Input Format: The prompt and response are concatenated (e.g., [prompt] [response] [EOS]) and tokenized into a sequence.
 
-Reward Model: A learned function that scores responses based on human feedback, trained on ranked/rated data, taking a (prompt, response) pair as input and outputting a scalar reward (higher = better alignment).
+Training Data: Uses human-annotated preference datasets (e.g., ranked responses to prompts) and is trained with a pairwise ranking loss (e.g., Bradley-Terry model) to learn relative preferences.
 
-Training Process:
+Output: A single numerical value representing alignment with human preferences (higher = better).
 
-The agent generates responses to prompts (states) and receives rewards from the reward model.
-
-The RL objective maximizes expected reward while penalizing deviation from a reference model (original SFT model) via a KL-divergence term:
-
-Proximal Policy Optimization (PPO) is typically used to update the policy.
-
-Key Challenges:
-
-Reward hacking (exploiting reward model flaws), mitigated by KL penalties.
-
-State complexity due to long text sequences, complicating credit assignment.
-
-Scalability of human feedback collection.
-
-Outcome: Post-RL training, the LLM generates text more aligned with human values, balancing creativity, safety, and coherence, with the policy internalizing preferences through reward-guided exploration.
+The model is frozen during RL training to provide stable reward signals for optimizing the policy (LLM).
