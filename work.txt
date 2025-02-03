@@ -1,1 +1,27 @@
-PPO replaces TRPO’s second-order constrained optimization with a first-order gradient-based approach, approximating trust region constraints through a clipped or penalized objective function. This simplifies implementation while retaining stability.
+Agent: The LLM itself, acting as the policy network, initialized from a pre-trained or supervised fine-tuned (SFT) model, with the goal of generating text that maximizes a reward signal.
+
+State: The current context (text prompt + generated tokens so far), represented as a sequence of tokens (e.g., "User: What is RL? Assistant: ...").
+
+Actions: The next token predicted by the LLM, with the action space being the model’s vocabulary (e.g., 50k tokens).
+
+Policy: The LLM’s parameterized strategy for selecting tokens (actions), represented by its transformer architecture, updated via RL algorithms (e.g., PPO) to maximize reward.
+
+Reward Model: A learned function that scores responses based on human feedback, trained on ranked/rated data, taking a (prompt, response) pair as input and outputting a scalar reward (higher = better alignment).
+
+Training Process:
+
+The agent generates responses to prompts (states) and receives rewards from the reward model.
+
+The RL objective maximizes expected reward while penalizing deviation from a reference model (original SFT model) via a KL-divergence term:
+
+Proximal Policy Optimization (PPO) is typically used to update the policy.
+
+Key Challenges:
+
+Reward hacking (exploiting reward model flaws), mitigated by KL penalties.
+
+State complexity due to long text sequences, complicating credit assignment.
+
+Scalability of human feedback collection.
+
+Outcome: Post-RL training, the LLM generates text more aligned with human values, balancing creativity, safety, and coherence, with the policy internalizing preferences through reward-guided exploration.
