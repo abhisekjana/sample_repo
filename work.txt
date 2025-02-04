@@ -1,13 +1,30 @@
-The reward model in RLHF (Reinforcement Learning from Human Feedback) is typically a transformer-based neural network trained to predict human preferences. Its architecture includes:
+At a high level, the RLHF (Reinforcement Learning from Human Feedback) process for language models is structured in several key stages. Here’s an overview with the main components and how they interconnect:
 
-Base Model: Initialized from a pre-trained language model (e.g., a smaller version of the policy model) to leverage general language understanding.
+Pre-training the Language Model (LM):
+The journey begins with a large language model that is initially trained on vast amounts of internet text using self-supervised learning (typically next-token prediction). This gives the model a broad grasp of language patterns, grammar, and general world knowledge.
 
-Regression Head: A final linear layer added on top of the base model, which outputs a scalar reward score for a given (prompt, response) pair.
+Supervised Fine-Tuning (SFT):
+Before applying any reinforcement learning, the pre-trained LM is fine-tuned on a smaller, high-quality dataset that consists of human-written prompt–response pairs. During SFT, human annotators provide “ideal” responses to various prompts, and the model learns to mimic these high-quality examples. This step aligns the model closer to what users expect and creates a solid starting point for the RL phase.
 
-Input Format: The prompt and response are concatenated (e.g., [prompt] [response] [EOS]) and tokenized into a sequence.
+Training a Reward Model:
+Next, human feedback is gathered on the outputs produced by the SFT model. Typically, for a given prompt, multiple responses are generated, and human evaluators rank or rate these responses based on criteria such as correctness, helpfulness, safety, and style.
 
-Training Data: Uses human-annotated preference datasets (e.g., ranked responses to prompts) and is trained with a pairwise ranking loss (e.g., Bradley-Terry model) to learn relative preferences.
+Using these comparisons (often in a pairwise format), a separate reward model is trained. This model learns to predict a scalar “reward” that represents how well a response aligns with human preferences.
+In other words, the reward model becomes an automated proxy for human judgment.
+Reinforcement Learning (Policy Optimization):
+The final stage involves fine-tuning the language model using reinforcement learning. In this phase:
 
-Output: A single numerical value representing alignment with human preferences (higher = better).
+The current (or SFT) model generates responses to prompts.
+These responses are scored by the reward model.
+The language model is then updated using a policy-gradient algorithm (most commonly Proximal Policy Optimization, or PPO) that maximizes the expected reward.
+To maintain stability and prevent the model from deviating too far from its well-tuned SFT behavior, a KL divergence penalty is usually included. This “trust region” constraint ensures that policy updates are conservative.
+Iterative Improvement:
+In practice, the RLHF process is often iterative. Once the model is updated via RL, new outputs can be generated and re-ranked by humans, which leads to further refinement of both the reward model and the language model policy. This loop continues until the model’s outputs consistently meet the desired quality and safety criteria.
 
-The model is frozen during RL training to provide stable reward signals for optimizing the policy (LLM).
+In Summary
+Step 1: Pre-train the LM on massive datasets (self-supervised learning).
+Step 2: Fine-tune the LM with high-quality, human-curated examples (SFT).
+Step 3: Collect human feedback on model outputs and train a reward model that predicts which responses are most preferred.
+Step 4: Use reinforcement learning (e.g., PPO with KL constraints) to update the LM’s policy so that it generates responses that score higher on the reward model.
+Step 5: Optionally, iterate this process to continually refine both the reward model and the language model.
+This overall structure enables companies to transform a raw, broadly trained language model into one that is more aligned with human values and practical requirements—yielding systems like ChatGPT, Anthropic's Claude, and others that provide more helpful, truthful, and safe outputs.
