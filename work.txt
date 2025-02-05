@@ -1,1 +1,56 @@
-AI Alignment in LLMs refers to ensuring language models act in accordance with human values, intentions, and ethical principles. It involves training models to generate helpful, honest, and harmless outputs while avoiding harmful behaviors (e.g., bias, misinformation, toxicity). Techniques like Reinforcement Learning from Human Feedback (RLHF) and adversarial testing are used to align model behavior with desired goals. The challenge lies in balancing robustness, fairness, and adaptability across diverse contexts and user intents.
+Core Idea:
+DPO bypasses the intermediate step of training a reward model (used in methods like RLHF) and instead optimizes the LLM's policy directly using pairwise human preferences. These preferences typically rank or compare responses to a given prompt (e.g., "Response A is better than Response B").
+
+Mechanism:
+
+For a prompt 
+x
+x, the model generates two responses 
+y
+1
+y 
+1
+​
+  and 
+y
+2
+y 
+2
+​
+ .
+
+Humans provide feedback indicating which response is preferred (
+y
+w
+≻
+y
+l
+y 
+w
+​
+ ≻y 
+l
+​
+ , where 
+w
+=
+winning
+,
+l
+=
+losing
+w=winning,l=losing).
+
+DPO updates the model to increase the likelihood of generating 
+y
+w
+y 
+w
+​
+  and decrease the likelihood of 
+y
+l
+y 
+l
+​
+  using a contrastive loss function.
