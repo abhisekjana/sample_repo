@@ -1,1 +1,20 @@
-Odds Ratio Preference Optimization (ORPO) is an innovative approach that integrates preference alignment directly into the supervised fine-tuning phase of a language model. It modifies the conventional negative log-likelihood loss by adding an extra penalty term based on the log odds ratio between a preferred (chosen) response and a non-preferred (rejected) one. This odds ratio is calculated by comparing the probability assigned to the chosen response against that of the rejected response, ensuring that the model learns to favor outputs that align with human preferences. By embedding this penalty into the loss function, ORPO effectively guides the model to increase the likelihood of generating desired responses while simultaneously discouraging undesired styles. Unlike traditional methods that require a separate reward model or multiple training stages, ORPO achieves alignment in a single, monolithic process, thereby reducing computational overhead. Empirical studies have shown that this method can lead to substantial improvements in performance across various benchmarks, even when applied to relatively small models. Its design not only preserves the benefits of supervised fine-tuning but also provides a stable gradient signal, avoiding the pitfalls of overly aggressive suppression that can occur with simpler probability ratio methods. Overall, ORPO represents a streamlined and efficient strategy for developing language models that are better aligned with human values and preferences.
+Large Language Models (LLMs) typically generate responses directly without explicitly reasoning before answering, limiting their ability to handle complex tasks requiring planning and reflection​
+.
+The paper introduces Thought Preference Optimization (TPO), a method that teaches LLMs to generate internal "thoughts" before providing a response, improving reasoning without needing additional human-labeled data​
+.
+TPO follows an iterative preference optimization process, where multiple thought-response pairs are generated, and only the response is scored by a judge model​
+.
+The judge selects the best and worst responses, and the full thought-response pairs are used as "chosen" and "rejected" samples in Direct Preference Optimization (DPO) training​
+.
+This approach allows models to learn useful internal reasoning by optimizing for better final responses, rather than explicitly supervising thought generation​
+.
+TPO outperforms baseline models on AlpacaEval and Arena-Hard benchmarks, achieving a strong win rate of 52.5% and 37.3%, respectively​
+.
+Surprisingly, the method improves performance not only in reasoning tasks but also in general knowledge, marketing, and health-related queries, indicating broad utility​
+.
+The training process includes a length-control mechanism to prevent excessively long responses, ensuring concise and effective output​
+.
+The model is trained iteratively, refining its ability to think and improving response quality over multiple training rounds​
+.
+Overall, TPO enables LLMs to autonomously develop structured internal reasoning, making them more reliable and effective at general instruction-following tasks​
+.
