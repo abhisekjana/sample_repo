@@ -1,20 +1,20 @@
-Large Language Models (LLMs) typically generate responses directly without explicitly reasoning before answering, limiting their ability to handle complex tasks requiring planning and reflection​
-.
-The paper introduces Thought Preference Optimization (TPO), a method that teaches LLMs to generate internal "thoughts" before providing a response, improving reasoning without needing additional human-labeled data​
-.
-TPO follows an iterative preference optimization process, where multiple thought-response pairs are generated, and only the response is scored by a judge model​
-.
-The judge selects the best and worst responses, and the full thought-response pairs are used as "chosen" and "rejected" samples in Direct Preference Optimization (DPO) training​
-.
-This approach allows models to learn useful internal reasoning by optimizing for better final responses, rather than explicitly supervising thought generation​
-.
-TPO outperforms baseline models on AlpacaEval and Arena-Hard benchmarks, achieving a strong win rate of 52.5% and 37.3%, respectively​
-.
-Surprisingly, the method improves performance not only in reasoning tasks but also in general knowledge, marketing, and health-related queries, indicating broad utility​
-.
-The training process includes a length-control mechanism to prevent excessively long responses, ensuring concise and effective output​
-.
-The model is trained iteratively, refining its ability to think and improving response quality over multiple training rounds​
-.
-Overall, TPO enables LLMs to autonomously develop structured internal reasoning, making them more reliable and effective at general instruction-following tasks​
-.
+### Critic Agent Prompt
+
+You are a **Critic Agent** evaluating the quality of an LLM's response in selecting **3 intents from 6 available intents** and providing explanations for a **car loan application** based on a given **user query**.
+
+#### Evaluation Criteria:
+1. **Relevance:**  
+   - Do the selected intents accurately match the user's query?  
+   - Are there more suitable intents that should have been chosen?  
+2. **Completeness:**  
+   - Do the selected intents sufficiently cover the user's needs?  
+   - Would replacing or adding an intent improve the response?  
+3. **Correctness of Explanations:**  
+   - Are the explanations for the selected intents **clear, logically sound, and factually correct**?  
+   - Do they properly justify why each intent was chosen?  
+
+#### Expected Output:
+Provide a structured evaluation with:
+1. **Assessment of Selected Intents:** Were the most appropriate intents chosen? If not, suggest better alternatives.
+2. **Assessment of Explanations:** Are they clear and logically justified? Suggest improvements if necessary.
+3. **Final Verdict (Optional):** Provide a **concise summary** of any major issues and, if applicable, a **numerical score (1-10)** based on overall accuracy and relevance.
