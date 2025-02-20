@@ -1,56 +1,49 @@
 import logging
-from logging.handlers import RotatingFileHandler
+import sys
 
-_logger_initialized = False  # Ensure logger is set up once
+def setup_logger(level=logging.DEBUG, log_file="app.log"):
+    """
+    Configure the root logger with a custom format and handlers.
+    
+    Args:
+        level (int): Logging level (e.g., logging.DEBUG, logging.INFO).
+        log_file (str): Path to the log file. Defaults to "app.log".
+    """
+    # Get the root logger
+    logger = logging.getLogger()
+    logger.setLevel(level)
 
-class CustomLogger(logging.Logger):
-    """Custom Logger that includes class names automatically."""
+    # Remove existing handlers to avoid duplication
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
 
-    def __init__(self, name):
-        super().__init__(name)
+    # Create a formatter
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(filename)s - %(levelname)s - %(message)s'
+    )
 
-    def get_class_logger(self, cls):
-        """Returns a logger instance with the class name included."""
-        return logging.getLogger(f"{cls.__module__}.{cls.__name__}")
-
-# ✅ Register Custom Logger
-logging.setLoggerClass(CustomLogger)
-
-def setup_logger():
-    """Sets up logging with file and console handlers."""
-    global _logger_initialized
-    if _logger_initialized:
-        return logging.getLogger("app_logger")  # Return existing logger
-
-    logger = logging.getLogger("app_logger")
-    logger.setLevel(logging.DEBUG)  # Ensure proper log level
-
-    # Console Handler (INFO+)
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.DEBUG)  # Show debug messages
-
-    # File Handler (DEBUG+ with rotation)
-    file_handler = RotatingFileHandler("app.log", maxBytes=1_000_000, backupCount=5)
-    file_handler.setLevel(logging.DEBUG)
-
-    # Log Format (Includes module/class names)
-    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    # Create console handler (logs to sys.stdout)
+    console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
+    # Create file handler (logs to the specified file)
+    file_handler = logging.FileHandler(log_file)
     file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
 
-    # Avoid duplicate handlers
-    if not logger.handlers:
-        logger.addHandler(console_handler)
-        logger.addHandler(file_handler)
+import logging
+from setup_logger import setup_logger
 
-    _logger_initialized = True
-    return logger
+# Initialize the logger
+setup_logger(level=logging.DEBUG, log_file="app.log")
 
-# ✅ Ensure logging is initialized when imported
-setup_logger()
+# Create a logger for this module
+logger = logging.getLogger(__name__)
 
-def get_logger(name):
-    """Ensures logging is set up before returning a logger instance."""
-    if not _logger_initialized:
-        setup_logger()
-    return logging.getLogger(name)
+def main():
+    logger.info("Starting the application...")
+    # Your code here
+
+if __name__ == "__main__":
+    main()
