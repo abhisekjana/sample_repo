@@ -1,20 +1,43 @@
-### Critic Agent Prompt
+import logging
+from logging.handlers import RotatingFileHandler
 
-You are a **Critic Agent** evaluating the quality of an LLM's response in selecting **3 intents from 6 available intents** and providing explanations for a **car loan application** based on a given **user query**.
+class CustomLogger(logging.Logger):
+    """Custom Logger that automatically includes class names in logs."""
+    
+    def __init__(self, name):
+        super().__init__(name)  # Initialize base Logger class
 
-#### Evaluation Criteria:
-1. **Relevance:**  
-   - Do the selected intents accurately match the user's query?  
-   - Are there more suitable intents that should have been chosen?  
-2. **Completeness:**  
-   - Do the selected intents sufficiently cover the user's needs?  
-   - Would replacing or adding an intent improve the response?  
-3. **Correctness of Explanations:**  
-   - Are the explanations for the selected intents **clear, logically sound, and factually correct**?  
-   - Do they properly justify why each intent was chosen?  
+    def get_class_logger(self, cls):
+        """Returns a logger instance that automatically logs the class name."""
+        return logging.getLogger(f"{cls.__module__}.{cls.__name__}")
 
-#### Expected Output:
-Provide a structured evaluation with:
-1. **Assessment of Selected Intents:** Were the most appropriate intents chosen? If not, suggest better alternatives.
-2. **Assessment of Explanations:** Are they clear and logically justified? Suggest improvements if necessary.
-3. **Final Verdict (Optional):** Provide a **concise summary** of any major issues and, if applicable, a **numerical score (1-10)** based on overall accuracy and relevance.
+# Register the custom logger
+logging.setLoggerClass(CustomLogger)
+
+def setup_logger():
+    """Configure logging for both file and console."""
+    logger = logging.getLogger("app_logger")
+    logger.setLevel(logging.DEBUG)
+
+    # Console Handler (INFO+)
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+
+    # File Handler (DEBUG+, with rotation)
+    file_handler = RotatingFileHandler("app.log", maxBytes=1_000_000, backupCount=5)
+    file_handler.setLevel(logging.DEBUG)
+
+    # Log Format (Automatically captures module.class name)
+    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    console_handler.setFormatter(formatter)
+    file_handler.setFormatter(formatter)
+
+    # Avoid adding duplicate handlers
+    if not logger.handlers:
+        logger.addHandler(console_handler)
+        logger.addHandler(file_handler)
+
+    return logger
+
+# Initialize and set up the global logger
+app_logger = setup_logger()
