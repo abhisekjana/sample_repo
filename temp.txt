@@ -1,0 +1,56 @@
+import logging
+from logging.handlers import RotatingFileHandler
+
+_logger_initialized = False  # Ensure logger is set up once
+
+class CustomLogger(logging.Logger):
+    """Custom Logger that includes class names automatically."""
+
+    def __init__(self, name):
+        super().__init__(name)
+
+    def get_class_logger(self, cls):
+        """Returns a logger instance with the class name included."""
+        return logging.getLogger(f"{cls.__module__}.{cls.__name__}")
+
+# ✅ Register Custom Logger
+logging.setLoggerClass(CustomLogger)
+
+def setup_logger():
+    """Sets up logging with file and console handlers."""
+    global _logger_initialized
+    if _logger_initialized:
+        return logging.getLogger("app_logger")  # Return existing logger
+
+    logger = logging.getLogger("app_logger")
+    logger.setLevel(logging.DEBUG)  # Ensure proper log level
+
+    # Console Handler (INFO+)
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.DEBUG)  # Show debug messages
+
+    # File Handler (DEBUG+ with rotation)
+    file_handler = RotatingFileHandler("app.log", maxBytes=1_000_000, backupCount=5)
+    file_handler.setLevel(logging.DEBUG)
+
+    # Log Format (Includes module/class names)
+    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    console_handler.setFormatter(formatter)
+    file_handler.setFormatter(formatter)
+
+    # Avoid duplicate handlers
+    if not logger.handlers:
+        logger.addHandler(console_handler)
+        logger.addHandler(file_handler)
+
+    _logger_initialized = True
+    return logger
+
+# ✅ Ensure logging is initialized when imported
+setup_logger()
+
+def get_logger(name):
+    """Ensures logging is set up before returning a logger instance."""
+    if not _logger_initialized:
+        setup_logger()
+    return logging.getLogger(name)
