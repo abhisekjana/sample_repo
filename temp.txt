@@ -1,49 +1,156 @@
-import logging
-import sys
+from typing import TypedDict, Optional, List
+from langgraph.graph import StateGraph, END
+from pydantic import BaseModel
+import json
 
-def setup_logger(level=logging.DEBUG, log_file="app.log"):
-    """
-    Configure the root logger with a custom format and handlers.
+# Define custom state
+class AgentState(BaseModel):
+    app_id: str
+    system_id: str
+    document_text: Optional[str] = None
+    extracted_list: Optional[dict] = None
+    supported_list: Optional[dict] = None
+    matched_result: Optional[dict] = None
+    extraction_error: Optional[str] = None
+    match_error: Optional[str] = None
+    human_feedback: Optional[str] = None
+
+# Mock API client (replace with actual implementation)
+class ApiClient:
+    def fetch_document(self, app_id: str) -> str:
+        # Implement actual API call
+        return "Sample document text"
     
-    Args:
-        level (int): Logging level (e.g., logging.DEBUG, logging.INFO).
-        log_file (str): Path to the log file. Defaults to "app.log".
-    """
-    # Get the root logger
-    logger = logging.getLogger()
-    logger.setLevel(level)
+    def fetch_supported_list(self, system_id: str) -> dict:
+        # Implement actual API call
+        return {"supported_items": ["item1", "item2"]}
 
-    # Remove existing handlers to avoid duplication
-    for handler in logger.handlers[:]:
-        logger.removeHandler(handler)
+# Mock LLM client (replace with actual implementation)
+class LlamaClient:
+    def __init__(self):
+        self.retry_attempts = 0
+    
+    def generate(self, prompt: str) -> str:
+        # Implement actual LLM call
+        return '{"result": "sample"}'
+    
+    def extract_list_prompt(self, text: str) -> str:
+        return f"Extract list from: {text}"
+    
+    def match_lists_prompt(self, list1: dict, list2: dict) -> str:
+        return f"Match these lists: {list1} and {list2}"
 
-    # Create a formatter
-    formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(filename)s - %(levelname)s - %(message)s'
+# Initialize clients
+api_client = ApiClient()
+llama_client = LlamaClient()
+
+def fetch_document_node(state: AgentState) -> dict:
+    """Node to fetch document using app_id"""
+    state.document_text = api_client.fetch_document(state.app_id)
+    return state
+
+def extract_list_node(state: AgentState) -> dict:
+    """Node to extract list using LLM"""
+    prompt = llama_client.extract_list_prompt(state.document_text)
+    
+    try:
+        response = llama_client.generate(prompt)
+        state.extracted_list = json.loads(response)
+        state.extraction_error = None
+    except json.JSONDecodeError:
+        state.extraction_error = "Invalid JSON format"
+    
+    return state
+
+def handle_extraction_feedback(state: AgentState) -> dict:
+    """Node to handle human feedback for extraction"""
+    # In real implementation, integrate with feedback system
+    state.human_feedback = input("Provide feedback for extraction: ")
+    return state
+
+def fetch_supported_list_node(state: AgentState) -> dict:
+    """Node to fetch supported list using system_id"""
+    state.supported_list = api_client.fetch_supported_list(state.system_id)
+    return state
+
+def match_lists_node(state: AgentState) -> dict:
+    """Node to match lists using LLM"""
+    prompt = llama_client.match_lists_prompt(
+        state.extracted_list, 
+        state.supported_list
     )
+    
+    try:
+        response = llama_client.generate(prompt)
+        state.matched_result = json.loads(response)
+        state.match_error = None
+    except json.JSONDecodeError:
+        state.match_error = "Invalid JSON format"
+    
+    return state
 
-    # Create console handler (logs to sys.stdout)
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
+def handle_match_feedback(state: AgentState) -> dict:
+    """Node to handle human feedback for matching"""
+    # In real implementation, integrate with feedback system
+    state.human_feedback = input("Provide feedback for matching: ")
+    return state
 
-    # Create file handler (logs to the specified file)
-    file_handler = logging.FileHandler(log_file)
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
+def should_retry_extraction(state: AgentState) -> str:
+    """Conditional edge for extraction retry"""
+    return "retry_extraction" if state.extraction_error else "fetch_supported"
 
-import logging
-from setup_logger import setup_logger
+def should_retry_matching(state: AgentState) -> str:
+    """Conditional edge for matching retry"""
+    return "retry_matching" if state.match_error else END
 
-# Initialize the logger
-setup_logger(level=logging.DEBUG, log_file="app.log")
+# Build the graph
+builder = StateGraph(AgentState)
 
-# Create a logger for this module
-logger = logging.getLogger(__name__)
+# Add nodes
+builder.add_node("fetch_document", fetch_document_node)
+builder.add_node("extract_list", extract_list_node)
+builder.add_node("get_extraction_feedback", handle_extraction_feedback)
+builder.add_node("fetch_supported", fetch_supported_list_node)
+builder.add_node("match_lists", match_lists_node)
+builder.add_node("get_match_feedback", handle_match_feedback)
 
-def main():
-    logger.info("Starting the application...")
-    # Your code here
+# Set initial flow
+builder.set_entry_point("fetch_document")
+builder.add_edge("fetch_document", "extract_list")
 
-if __name__ == "__main__":
-    main()
+# Add conditional edges for extraction
+builder.add_conditional_edges(
+    "extract_list",
+    should_retry_extraction,
+    {
+        "retry_extraction": "get_extraction_feedback",
+        "fetch_supported": "fetch_supported"
+    }
+)
+builder.add_edge("get_extraction_feedback", "extract_list")
+
+# Add flow for supported list
+builder.add_edge("fetch_supported", "match_lists")
+
+# Add conditional edges for matching
+builder.add_conditional_edges(
+    "match_lists",
+    should_retry_matching,
+    {
+        "retry_matching": "get_match_feedback",
+        END: END
+    }
+)
+builder.add_edge("get_match_feedback", "match_lists")
+
+# Compile the graph
+agent = builder.compile()
+
+# Usage example
+inputs = {
+    "app_id": "APP-123",
+    "system_id": "SYS-456"
+}
+
+result = agent.invoke(inputs)
+print("Final Result:", result.matched_result)
