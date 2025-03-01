@@ -1,11 +1,23 @@
-Large language models (LLMs) have reshaped the landscape of natural language processing, powering applications from conversational agents to content generation. However, their raw capabilities often require fine-tuning and post-training optimization to perform reliably in real-world environments. This blog explores how reinforcement learning (RL) can be harnessed to optimize LLMs after their initial training, ensuring they align with desired behaviors, exhibit robust reasoning, and unlock new application opportunities.
+# Requirements for core
+jinja2~=3.0
+markdown~=3.2
+mkdocs~=1.6
+mkdocs-material~=9.5.46
+mkdocs-material-extensions~=1.3
+pygments~=2.16
+pymdown-extensions~=10.2
 
-Several industry leaders have demonstrated the transformative potential of RL in refining LLM performance. For instance, OpenAI leverages Reinforcement Learning from Human Feedback (RLHF) in models like ChatGPT, where human evaluators provide feedback that guides the model to generate responses more closely aligned with user expectations. Anthropic employs constitutional AI to fine-tune its models using AI-generated feedback and human value alignment, while DeepMind uses RL strategies to improve the safety and helpfulness of its dialogue agents.
+# Requirements for plugins
+babel~=2.10
+colorama~=0.4
+paginate~=0.5
+regex>=2022.4
+requests~=2.26
 
-Adding to these examples is DeepSeek R1—an advanced reasoning model from the Chinese startup DeepSeek. DeepSeek R1 harnesses innovative RL techniques, such as Group Relative Policy Optimization (GRPO), to enhance its chain-of-thought reasoning and self-reflection capabilities. By incorporating a cold-start phase with curated data and a rule-based reward system, DeepSeek R1 fine-tunes its outputs on tasks like mathematics and coding, achieving competitive performance at a fraction of the traditional training cost 
-REUTERS.COM
-, 
-FT.COM
-.
-
-These examples illustrate how RL-based post-training not only improves LLM performance but also unlocks new opportunities for machine learning engineers—enabling the development of smarter, more adaptable applications across diverse domains.
+# Additional Material and MkDocs plugins
+mkdocs-glightbox~=0.4.0
+mkdocs-get-deps~=0.2.0
+mkdocs-minify-plugin~=0.8.0
+mkdocs-git-committers-plugin-2~=2.4.1
+mkdocs-git-revision-date-localized-plugin~=1.3.0
+mkdocs-rss-plugin~=1.16.0
