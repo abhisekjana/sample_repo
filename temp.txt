@@ -1,17 +1,136 @@
-Imagine a new cleaning robot, fresh out of the box, tasked with tidying your home. At first, it bumps into walls, spins in circles, and misses dirty spots. But over time, it starts avoiding obstacles, prioritizing messy areas, and finishing faster. How does it improve? The answer lies in reinforcement learning (RL)—a way of learning by trial, error, and feedback.
+def validate_vin(vin: str) -> (bool, str):
+    """
+    Validate a VIN (Vehicle Identification Number) and return a tuple:
+      (is_valid, error_message)
 
-Here’s how it works in simple terms:
+    A valid VIN must:
+      - Be a 17-character string.
+      - Not contain the letters I, O, or Q, or any other invalid characters.
+      - Have a valid check digit at position 9, computed as per ISO 3779.
 
-Observation: The robot senses its environment—like where the furniture is, which floors are dirty, or how much battery it has left.
+    Parameters:
+        vin (str): The VIN to validate.
 
-Action: Based on what it “sees,” it decides to move forward, turn, or start vacuuming.
+    Returns:
+        (bool, str): A tuple where the first element is True if the VIN is valid,
+                     otherwise False, and the second element contains a message
+                     describing the error(s) or a success message.
+    """
+    errors = []
+    vin = vin.upper()
 
-Reward: If it cleans a dirty spot, it gets a virtual “thumbs up.” If it bumps into a wall, it gets a “thumbs down.”
+    # Check VIN length
+    if len(vin) != 17:
+        errors.append(f"VIN length is incorrect: expected 17 characters, got {len(vin)}.")
+        return False, "\n".join(errors)
 
-Learning: The robot remembers which actions led to rewards (e.g., “turning left here avoids the couch”) and updates its strategy to repeat those good choices.
+    # Define allowed characters: digits and letters (excluding I, O, Q)
+    allowed_letters = set("ABCDEFGHJKLMNPRSTUVWXYZ")
+    
+    # Check for invalid characters and their positions
+    for i, ch in enumerate(vin):
+        if not ch.isdigit() and ch not in allowed_letters:
+            errors.append(f"Invalid character '{ch}' found at position {i+1}.")
 
-At first, the robot’s decisions are random. But every time it succeeds or fails, it tweaks its “brain” (its policy) to do better next time. Think of it like training a puppy: when the robot does something helpful (like cleaning under the sofa), it “earns a treat” (positive feedback), reinforcing that behavior. Over days or weeks, it builds a mental map of your home’s layout and the best paths to clean efficiently.
+    # Abort further processing if invalid characters were found
+    if errors:
+        return False, "\n".join(errors)
 
-The beauty of RL is that the robot isn’t programmed with rigid rules. Instead, it learns by doing, adapting to your unique space through experience. Just like how we learn to navigate a new city by exploring, the robot masters its environment through curiosity, mistakes, and gradual improvement.
+    # Define transliteration mapping for letters to numbers.
+    transliteration = {
+        'A': 1, 'B': 2, 'C': 3, 'D': 4, 'E': 5,
+        'F': 6, 'G': 7, 'H': 8, 'J': 1, 'K': 2,
+        'L': 3, 'M': 4, 'N': 5, 'P': 7, 'R': 9,
+        'S': 2, 'T': 3, 'U': 4, 'V': 5, 'W': 6,
+        'X': 7, 'Y': 8, 'Z': 9
+    }
+    
+    # Weight factors for each position (1-indexed positions 1-17)
+    weights = [8, 7, 6, 5, 4, 3, 2, 10, 0, 9, 8, 7, 6, 5, 4, 3, 2]
 
-So next time your robot zips past a chair leg it used to hit, remember: it’s not magic—it’s reinforcement learning in action! 🧹🤖
+    # Compute the weighted sum for check digit calculation.
+    total = 0
+    for i, char in enumerate(vin):
+        if char.isdigit():
+            value = int(char)
+        else:
+            value = transliteration[char]
+        total += value * weights[i]
+    
+    # Calculate the expected check digit.
+    remainder = total % 11
+    expected_check_digit = 'X' if remainder == 10 else str(remainder)
+
+    # Compare the expected check digit with the actual character at position 9.
+    if vin[8] != expected_check_digit:
+        errors.append(
+            f"Incorrect check digit at position 9: expected '{expected_check_digit}', got '{vin[8]}'."
+        )
+        return False, "\n".join(errors)
+
+    return True, "VIN is valid."
+
+# Example usage:
+if __name__ == "__main__":
+    test_vins = [
+        "1HGCM82633A004352",  # Example of a valid VIN
+        "1HGCM82633A00435I",  # Contains an invalid character 'I'
+        "1HGCM82633A00435X",  # Incorrect check digit
+        "1HGCM82633A00435",   # Incorrect length
+    ]
+    for vin in test_vins:
+        is_valid, message = validate_vin(vin)
+        print(f"Validating VIN: {vin}")
+        print(f"Result: {'Valid' if is_valid else 'Invalid'}")
+        print(f"Message: {message}\n")
+
+
+
+import json
+import re
+
+def extract_json_from_string(s: str) -> (object, str):
+    """
+    Extract a JSON object from a string.
+
+    This function searches for the first occurrence of a JSON object (i.e., a substring 
+    that starts with '{' and ends with '}') in the given string and attempts to decode it 
+    using json.loads.
+
+    Parameters:
+        s (str): The input string that may contain a JSON object.
+
+    Returns:
+        tuple: A tuple (json_data, message) where:
+            - json_data is the decoded JSON object (dict) if parsing is successful,
+              otherwise None.
+            - message is a string describing the result of the extraction.
+    """
+    # Regex pattern for a JSON object (assumes the content is a JSON object).
+    json_obj_pattern = re.compile(r'(\{.*\})', re.DOTALL)
+    
+    match = json_obj_pattern.search(s)
+    if match:
+        json_str = match.group(1)
+        try:
+            # Attempt to parse the JSON string.
+            data = json.loads(json_str)
+            return data, "JSON object extracted and parsed successfully."
+        except json.JSONDecodeError as e:
+            return None, f"Error decoding JSON: {e}"
+    else:
+        return None, "No JSON object found in the string."
+
+# Example usage:
+if __name__ == "__main__":
+    test_strings = [
+        'Here is some text with a JSON object: {"name": "Alice", "age": 30}. More text follows.',
+        'No JSON content is present here.',
+        'Malformed JSON example: {"name": "Bob", "age": 25'
+    ]
+    
+    for text in test_strings:
+        result, message = extract_json_from_string(text)
+        print("Message:", message)
+        print("Extracted JSON:", result)
+        print("-" * 40)
