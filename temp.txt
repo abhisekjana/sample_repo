@@ -1,54 +1,35 @@
-import cv2
-import numpy as np
-
-def crop_scanned_document(image_path, debug=False):
+def enhance_text_quality(image_path, output_path="enhanced_text.jpg"):
     # Read image
     img = cv2.imread(image_path)
     if img is None:
-        raise ValueError("Image not found or invalid path")
-
-    # Preprocessing pipeline
+        raise ValueError("Image not loaded - check path or file format")
+    
+    # Convert to grayscale
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    denoised = cv2.medianBlur(gray, ksize=3)  # Remove salt-and-pepper noise
     
-    # Adaptive thresholding for document binarization
-    thresh = cv2.adaptiveThreshold(
-        denoised, 255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY_INV, 21, 10
+    # 1. Denoising (preserve text edges)
+    denoised = cv2.fastNlMeansDenoising(
+        gray, None, h=15,  # Increase h for stronger denoising
+        templateWindowSize=7,
+        searchWindowSize=21
     )
-
-    # Morphological cleaning
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    cleaned = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=1)  # Remove small spots
-    cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, kernel, iterations=2)  # Merge text regions
-
-    # Remove large artifacts using contour area filtering
-    contours, _ = cv2.findContours(cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    mask = np.ones_like(cleaned) * 255
-    min_area = 100  # Minimum area for content retention (adjust as needed)
     
-    for cnt in contours:
-        if cv2.contourArea(cnt) < min_area:
-            cv2.drawContours(mask, [cnt], -1, 0, -1)
-
-    final_cleaned = cv2.bitwise_and(cleaned, mask)
-
-    # Find document content bounding box
-    coords = cv2.findNonZero(final_cleaned)
-    if coords is None:
-        return img  # Return original if no content found
+    # 2. Contrast enhancement (CLAHE)
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    clahe_img = clahe.apply(denoised)
     
-    x, y, w, h = cv2.boundingRect(coords)
-    cropped = img[y:y+h, x:x+w]
-
-    if debug:
-        cv2.imshow("Debug: Thresholded", thresh)
-        cv2.imshow("Debug: Cleaned", final_cleaned)
-        cv2.waitKey(0)
-
-    return cropped
-
-# Usage
-cropped_doc = crop_scanned_document("scanned_doc.jpg", debug=True)
-cv2.imwrite("final_cropped.jpg", cropped_doc)
+    # 3. Sharpening (unsharp mask)
+    blurred = cv2.GaussianBlur(clahe_img, (0, 0), 3)
+    sharpened = cv2.addWeighted(clahe_img, 2.5, blurred, -1.5, 0)
+    
+    # 4. Advanced binarization (Sauvola's method)
+    binary = sauvola(sharpened, window_size=25, k=0.2)  # Requires scikit-image
+    binary = (sharpened > binary).astype(np.uint8) * 255
+    
+    # 5. Post-processing (remove small noise)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+    cleaned = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=1)
+    
+    # Save result
+    cv2.imwrite(output_path, cleaned)
+    return cleaned
