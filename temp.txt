@@ -1,35 +1,56 @@
-def enhance_text_quality(image_path, output_path="enhanced_text.jpg"):
-    # Read image
+import cv2
+import numpy as np
+from skimage.filters import sauvola
+
+def smooth_text_edges(image_path, output_path="smoothed_text.jpg"):
     img = cv2.imread(image_path)
-    if img is None:
-        raise ValueError("Image not loaded - check path or file format")
-    
-    # Convert to grayscale
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     
-    # 1. Denoising (preserve text edges)
-    denoised = cv2.fastNlMeansDenoising(
-        gray, None, h=15,  # Increase h for stronger denoising
-        templateWindowSize=7,
-        searchWindowSize=21
-    )
+    # 1. Anti-aliasing blur (soften edges before thresholding)
+    anti_alias = cv2.GaussianBlur(gray, (3, 3), sigmaX=1.5, sigmaY=1.5)
     
-    # 2. Contrast enhancement (CLAHE)
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-    clahe_img = clahe.apply(denoised)
+    # 2. Adaptive thresholding (Sauvola's method)
+    binary = sauvola(anti_alias, window_size=25, k=0.15)
+    binary = (anti_alias > binary).astype(np.uint8) * 255
     
-    # 3. Sharpening (unsharp mask)
-    blurred = cv2.GaussianBlur(clahe_img, (0, 0), 3)
-    sharpened = cv2.addWeighted(clahe_img, 2.5, blurred, -1.5, 0)
+    # 3. Post-processing: Morphological smoothing
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+    smoothed = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=1)
     
-    # 4. Advanced binarization (Sauvola's method)
-    binary = sauvola(sharpened, window_size=25, k=0.2)  # Requires scikit-image
-    binary = (sharpened > binary).astype(np.uint8) * 255
+    cv2.imwrite(output_path, smoothed)
+    return smoothed
+
+def smooth_text_edges_post_binarization(image_path):
+    img = cv2.imread(image_path)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     
-    # 5. Post-processing (remove small noise)
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-    cleaned = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=1)
+    # 1. Binarize first
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     
-    # Save result
-    cv2.imwrite(output_path, cleaned)
-    return cleaned
+    # 2. Smooth edges with morphological closing + opening
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=1)  # Fill gaps
+    opened = cv2.morphologyEx(closed, cv2.MORPH_OPEN, kernel, iterations=1)    # Remove noise
+    
+    # 3. Optional: Gaussian blur + re-threshold for soft edges
+    blurred = cv2.GaussianBlur(opened, (3, 3), 0)
+    _, final = cv2.threshold(blurred, 200, 255, cv2.THRESH_BINARY)
+    
+    return final
+
+def subpixel_smoothing(image_path):
+    img = cv2.imread(image_path)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    
+    # Upscale with cubic interpolation
+    upscaled = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+    
+    # Process at higher resolution
+    anti_alias = cv2.GaussianBlur(upscaled, (3, 3), 1.5)
+    binary = cv2.adaptiveThreshold(anti_alias, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                  cv2.THRESH_BINARY, 11, 2)
+    
+    # Downscale with area interpolation
+    smoothed = cv2.resize(binary, (gray.shape[1], gray.shape[0]),
+                         interpolation=cv2.INTER_AREA)
+    return smoothed
