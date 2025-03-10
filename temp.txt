@@ -1,136 +1,54 @@
-def validate_vin(vin: str) -> (bool, str):
-    """
-    Validate a VIN (Vehicle Identification Number) and return a tuple:
-      (is_valid, error_message)
+import cv2
+import numpy as np
 
-    A valid VIN must:
-      - Be a 17-character string.
-      - Not contain the letters I, O, or Q, or any other invalid characters.
-      - Have a valid check digit at position 9, computed as per ISO 3779.
+def crop_scanned_document(image_path, debug=False):
+    # Read image
+    img = cv2.imread(image_path)
+    if img is None:
+        raise ValueError("Image not found or invalid path")
 
-    Parameters:
-        vin (str): The VIN to validate.
-
-    Returns:
-        (bool, str): A tuple where the first element is True if the VIN is valid,
-                     otherwise False, and the second element contains a message
-                     describing the error(s) or a success message.
-    """
-    errors = []
-    vin = vin.upper()
-
-    # Check VIN length
-    if len(vin) != 17:
-        errors.append(f"VIN length is incorrect: expected 17 characters, got {len(vin)}.")
-        return False, "\n".join(errors)
-
-    # Define allowed characters: digits and letters (excluding I, O, Q)
-    allowed_letters = set("ABCDEFGHJKLMNPRSTUVWXYZ")
+    # Preprocessing pipeline
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    denoised = cv2.medianBlur(gray, ksize=3)  # Remove salt-and-pepper noise
     
-    # Check for invalid characters and their positions
-    for i, ch in enumerate(vin):
-        if not ch.isdigit() and ch not in allowed_letters:
-            errors.append(f"Invalid character '{ch}' found at position {i+1}.")
+    # Adaptive thresholding for document binarization
+    thresh = cv2.adaptiveThreshold(
+        denoised, 255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV, 21, 10
+    )
 
-    # Abort further processing if invalid characters were found
-    if errors:
-        return False, "\n".join(errors)
+    # Morphological cleaning
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    cleaned = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=1)  # Remove small spots
+    cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, kernel, iterations=2)  # Merge text regions
 
-    # Define transliteration mapping for letters to numbers.
-    transliteration = {
-        'A': 1, 'B': 2, 'C': 3, 'D': 4, 'E': 5,
-        'F': 6, 'G': 7, 'H': 8, 'J': 1, 'K': 2,
-        'L': 3, 'M': 4, 'N': 5, 'P': 7, 'R': 9,
-        'S': 2, 'T': 3, 'U': 4, 'V': 5, 'W': 6,
-        'X': 7, 'Y': 8, 'Z': 9
-    }
+    # Remove large artifacts using contour area filtering
+    contours, _ = cv2.findContours(cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    mask = np.ones_like(cleaned) * 255
+    min_area = 100  # Minimum area for content retention (adjust as needed)
     
-    # Weight factors for each position (1-indexed positions 1-17)
-    weights = [8, 7, 6, 5, 4, 3, 2, 10, 0, 9, 8, 7, 6, 5, 4, 3, 2]
+    for cnt in contours:
+        if cv2.contourArea(cnt) < min_area:
+            cv2.drawContours(mask, [cnt], -1, 0, -1)
 
-    # Compute the weighted sum for check digit calculation.
-    total = 0
-    for i, char in enumerate(vin):
-        if char.isdigit():
-            value = int(char)
-        else:
-            value = transliteration[char]
-        total += value * weights[i]
+    final_cleaned = cv2.bitwise_and(cleaned, mask)
+
+    # Find document content bounding box
+    coords = cv2.findNonZero(final_cleaned)
+    if coords is None:
+        return img  # Return original if no content found
     
-    # Calculate the expected check digit.
-    remainder = total % 11
-    expected_check_digit = 'X' if remainder == 10 else str(remainder)
+    x, y, w, h = cv2.boundingRect(coords)
+    cropped = img[y:y+h, x:x+w]
 
-    # Compare the expected check digit with the actual character at position 9.
-    if vin[8] != expected_check_digit:
-        errors.append(
-            f"Incorrect check digit at position 9: expected '{expected_check_digit}', got '{vin[8]}'."
-        )
-        return False, "\n".join(errors)
+    if debug:
+        cv2.imshow("Debug: Thresholded", thresh)
+        cv2.imshow("Debug: Cleaned", final_cleaned)
+        cv2.waitKey(0)
 
-    return True, "VIN is valid."
+    return cropped
 
-# Example usage:
-if __name__ == "__main__":
-    test_vins = [
-        "1HGCM82633A004352",  # Example of a valid VIN
-        "1HGCM82633A00435I",  # Contains an invalid character 'I'
-        "1HGCM82633A00435X",  # Incorrect check digit
-        "1HGCM82633A00435",   # Incorrect length
-    ]
-    for vin in test_vins:
-        is_valid, message = validate_vin(vin)
-        print(f"Validating VIN: {vin}")
-        print(f"Result: {'Valid' if is_valid else 'Invalid'}")
-        print(f"Message: {message}\n")
-
-
-
-import json
-import re
-
-def extract_json_from_string(s: str) -> (object, str):
-    """
-    Extract a JSON object from a string.
-
-    This function searches for the first occurrence of a JSON object (i.e., a substring 
-    that starts with '{' and ends with '}') in the given string and attempts to decode it 
-    using json.loads.
-
-    Parameters:
-        s (str): The input string that may contain a JSON object.
-
-    Returns:
-        tuple: A tuple (json_data, message) where:
-            - json_data is the decoded JSON object (dict) if parsing is successful,
-              otherwise None.
-            - message is a string describing the result of the extraction.
-    """
-    # Regex pattern for a JSON object (assumes the content is a JSON object).
-    json_obj_pattern = re.compile(r'(\{.*\})', re.DOTALL)
-    
-    match = json_obj_pattern.search(s)
-    if match:
-        json_str = match.group(1)
-        try:
-            # Attempt to parse the JSON string.
-            data = json.loads(json_str)
-            return data, "JSON object extracted and parsed successfully."
-        except json.JSONDecodeError as e:
-            return None, f"Error decoding JSON: {e}"
-    else:
-        return None, "No JSON object found in the string."
-
-# Example usage:
-if __name__ == "__main__":
-    test_strings = [
-        'Here is some text with a JSON object: {"name": "Alice", "age": 30}. More text follows.',
-        'No JSON content is present here.',
-        'Malformed JSON example: {"name": "Bob", "age": 25'
-    ]
-    
-    for text in test_strings:
-        result, message = extract_json_from_string(text)
-        print("Message:", message)
-        print("Extracted JSON:", result)
-        print("-" * 40)
+# Usage
+cropped_doc = crop_scanned_document("scanned_doc.jpg", debug=True)
+cv2.imwrite("final_cropped.jpg", cropped_doc)
