@@ -1,56 +1,54 @@
 import cv2
 import numpy as np
-from skimage.filters import sauvola
+import math
 
-def smooth_text_edges(image_path, output_path="smoothed_text.jpg"):
+def straighten_text_based(image_path, output_path="straightened.jpg"):
+    # Read image
     img = cv2.imread(image_path)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    
-    # 1. Anti-aliasing blur (soften edges before thresholding)
-    anti_alias = cv2.GaussianBlur(gray, (3, 3), sigmaX=1.5, sigmaY=1.5)
-    
-    # 2. Adaptive thresholding (Sauvola's method)
-    binary = sauvola(anti_alias, window_size=25, k=0.15)
-    binary = (anti_alias > binary).astype(np.uint8) * 255
-    
-    # 3. Post-processing: Morphological smoothing
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
-    smoothed = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=1)
-    
-    cv2.imwrite(output_path, smoothed)
-    return smoothed
 
-def smooth_text_edges_post_binarization(image_path):
-    img = cv2.imread(image_path)
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    
-    # 1. Binarize first
-    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-    
-    # 2. Smooth edges with morphological closing + opening
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=1)  # Fill gaps
-    opened = cv2.morphologyEx(closed, cv2.MORPH_OPEN, kernel, iterations=1)    # Remove noise
-    
-    # 3. Optional: Gaussian blur + re-threshold for soft edges
-    blurred = cv2.GaussianBlur(opened, (3, 3), 0)
-    _, final = cv2.threshold(blurred, 200, 255, cv2.THRESH_BINARY)
-    
-    return final
+    # 1. Preprocess: Thresholding & Edge Detection
+    _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    edges = cv2.Canny(thresh, 50, 150, apertureSize=3)
 
-def subpixel_smoothing(image_path):
-    img = cv2.imread(image_path)
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    
-    # Upscale with cubic interpolation
-    upscaled = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-    
-    # Process at higher resolution
-    anti_alias = cv2.GaussianBlur(upscaled, (3, 3), 1.5)
-    binary = cv2.adaptiveThreshold(anti_alias, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                  cv2.THRESH_BINARY, 11, 2)
-    
-    # Downscale with area interpolation
-    smoothed = cv2.resize(binary, (gray.shape[1], gray.shape[0]),
-                         interpolation=cv2.INTER_AREA)
-    return smoothed
+    # 2. Detect Lines (Hough Transform)
+    lines = cv2.HoughLinesP(
+        edges, 1, np.pi/180, threshold=100,
+        minLineLength=100, maxLineGap=10
+    )
+
+    # 3. Calculate Angles of Detected Lines
+    angles = []
+    for line in lines:
+        x1, y1, x2, y2 = line[0]
+        angle = math.degrees(math.atan2(y2 - y1, x2 - x1))
+        # Focus on near-horizontal lines (text baselines)
+        if abs(angle) < 45:  # Ignore vertical lines
+            angles.append(angle)
+
+    # 4. Compute Median Skew Angle
+    median_angle = np.median(angles)
+    print(f"Detected Skew Angle: {median_angle:.2f} degrees")
+
+    # 5. Rotate Image to Correct Skew
+    (h, w) = img.shape[:2]
+    center = (w // 2, h // 2)
+    M = cv2.getRotationMatrix2D(center, median_angle, 1.0)
+    rotated = cv2.warpAffine(
+        img, M, (w, h),
+        flags=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_REPLICATE
+    )
+
+    # 6. Crop Black Borders (Optional)
+    gray_rotated = cv2.cvtColor(rotated, cv2.COLOR_BGR2GRAY)
+    _, thresh_rot = cv2.threshold(gray_rotated, 1, 255, cv2.THRESH_BINARY)
+    coords = cv2.findNonZero(thresh_rot)
+    x, y, w, h = cv2.boundingRect(coords)
+    cropped = rotated[y:y+h, x:x+w]
+
+    cv2.imwrite(output_path, cropped)
+    return cropped
+
+# Usage
+straightened = straighten_text_based("skewed_doc.jpg")
