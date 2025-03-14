@@ -1,16 +1,63 @@
-from PIL import Image, ImageOps
+def preprocess(image_path, target_height=1000):
+    img = cv2.imread(image_path)
+    img = deskew(img)  # Apply deskewing
+    ratio = target_height / img.shape[0]
+    resized = cv2.resize(img, (int(img.shape[1] * ratio), target_height))
+    gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+    _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
+    return binary
 
-def preprocess_ocr_image(image_path, output_size=1120, pad_color=(255, 255, 255)):
-    # Open image and crop region of interest
-    image = Image.open(image_path).convert("RGB")
-    width, height = image.size
+def hu_moments(image):
+    moments = cv2.moments(image)
+    hu = cv2.HuMoments(moments).flatten()
+    return -np.sign(hu) * np.log10(np.abs(hu))  # Scale-invariant
 
-    # Pad to square
-    if width != height:
-        delta_w = abs(width - height)
-        padding = (0, delta_w // 2, 0, delta_w - delta_w // 2)  # (left, top, right, bottom)
-        image = ImageOps.expand(image, padding, fill=pad_color)
+def grid_features(image, grid_size=(10, 10)):
+    h, w = image.shape
+    cell_h, cell_w = h // grid_size[0], w // grid_size[1]
+    features = []
+    for i in range(grid_size[0]):
+        for j in range(grid_size[1]):
+            cell = image[i*cell_h:(i+1)*cell_h, j*cell_w:(j+1)*cell_w]
+            features.append(np.sum(cell) / (255 * cell_h * cell_w))  # Normalized density
+    return np.array(features)
 
-    # Resize to target dimensions (if needed)
-    image = image.resize((output_size, output_size))
-    return image
+def projection_features(image):
+    # Smooth projections to tolerate minor misalignments
+    horizontal = cv2.blur(np.sum(image, axis=1) / 255, (5,))
+    vertical = cv2.blur(np.sum(image, axis=0) / 255, (5,))
+    return np.concatenate([horizontal, vertical])
+
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+
+# Extract features for all documents
+features = []
+for path in document_paths:
+    img = preprocess(path)
+    hu = hu_moments(img)
+    grid = grid_features(img)
+    proj = projection_features(img)
+    features.append(np.concatenate([hu, grid, proj]))
+
+# Normalize features
+scaler = StandardScaler()
+scaled_features = scaler.fit_transform(features)
+
+# Cluster into 3 templates
+kmeans = KMeans(n_clusters=3, random_state=0)
+labels = kmeans.fit_predict(scaled_features)
+
+# Find representative documents (closest to cluster centroids)
+representatives = []
+for i in range(3):
+    cluster_samples = scaled_features[labels == i]
+    centroid = kmeans.cluster_centers_[i]
+    distances = np.linalg.norm(cluster_samples - centroid, axis=1)
+    representative_idx = np.argmin(distances)
+    representatives.append(document_paths[labels == i][representative_idx])
+
+def visualize_features(image):
+    cv2.imshow("Deskewed", preprocess(image_path))
+    plt.plot(projection_features(preprocess(image_path)))  # Plot projections
+    plt.show()
