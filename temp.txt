@@ -1,63 +1,106 @@
-def preprocess(image_path, target_height=1000):
-    img = cv2.imread(image_path)
-    img = deskew(img)  # Apply deskewing
-    ratio = target_height / img.shape[0]
-    resized = cv2.resize(img, (int(img.shape[1] * ratio), target_height))
-    gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
-    _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
-    return binary
-
-def hu_moments(image):
-    moments = cv2.moments(image)
-    hu = cv2.HuMoments(moments).flatten()
-    return -np.sign(hu) * np.log10(np.abs(hu))  # Scale-invariant
-
-def grid_features(image, grid_size=(10, 10)):
-    h, w = image.shape
-    cell_h, cell_w = h // grid_size[0], w // grid_size[1]
-    features = []
-    for i in range(grid_size[0]):
-        for j in range(grid_size[1]):
-            cell = image[i*cell_h:(i+1)*cell_h, j*cell_w:(j+1)*cell_w]
-            features.append(np.sum(cell) / (255 * cell_h * cell_w))  # Normalized density
-    return np.array(features)
-
-def projection_features(image):
-    # Smooth projections to tolerate minor misalignments
-    horizontal = cv2.blur(np.sum(image, axis=1) / 255, (5,))
-    vertical = cv2.blur(np.sum(image, axis=0) / 255, (5,))
-    return np.concatenate([horizontal, vertical])
-
+import cv2
+import numpy as np
+from sklearn.metrics import pairwise_distances
 from sklearn.preprocessing import StandardScaler
-from sklearn.cluster import KMeans
 
-# Extract features for all documents
-features = []
-for path in document_paths:
-    img = preprocess(path)
-    hu = hu_moments(img)
-    grid = grid_features(img)
-    proj = projection_features(img)
-    features.append(np.concatenate([hu, grid, proj]))
+class DocumentClassifier:
+    def __init__(self, initial_templates, threshold=3.0):
+        self.templates = []
+        self.threshold = threshold
+        self.scaler = StandardScaler()
+        
+        # Initialize with first 3 templates
+        for path in initial_templates:
+            features = self.process_image(path)
+            self.templates.append(features)
+        
+        # Fit scaler on initial templates
+        self.scaler.fit(np.array(self.templates))
 
-# Normalize features
-scaler = StandardScaler()
-scaled_features = scaler.fit_transform(features)
+    def process_image(self, image_path):
+        """Preprocess and extract features from document"""
+        # Read and deskew
+        img = cv2.imread(image_path)
+        img = self.deskew(img)
+        
+        # Resize and binarize
+        img = cv2.resize(img, (1000, 1000))
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
+        
+        # Feature extraction
+        features = np.concatenate([
+            self.hu_moments(binary),
+            self.projection_features(binary),
+            self.grid_features(binary, grid_size=(10, 10))
+        ])
+        return features
 
-# Cluster into 3 templates
-kmeans = KMeans(n_clusters=3, random_state=0)
-labels = kmeans.fit_predict(scaled_features)
+    def hu_moments(self, image):
+        """Rotation-invariant moment features"""
+        moments = cv2.moments(image)
+        hu = cv2.HuMoments(moments).flatten()
+        return -np.sign(hu) * np.log10(np.abs(hu))
 
-# Find representative documents (closest to cluster centroids)
-representatives = []
-for i in range(3):
-    cluster_samples = scaled_features[labels == i]
-    centroid = kmeans.cluster_centers_[i]
-    distances = np.linalg.norm(cluster_samples - centroid, axis=1)
-    representative_idx = np.argmin(distances)
-    representatives.append(document_paths[labels == i][representative_idx])
+    def projection_features(self, image):
+        """Horizontal/vertical projection profiles with smoothing"""
+        horizontal = cv2.blur(np.sum(image, axis=1)/255, (5,))
+        vertical = cv2.blur(np.sum(image, axis=0)/255, (5,))
+        return np.concatenate([horizontal, vertical])
 
-def visualize_features(image):
-    cv2.imshow("Deskewed", preprocess(image_path))
-    plt.plot(projection_features(preprocess(image_path)))  # Plot projections
-    plt.show()
+    def grid_features(self, image, grid_size=(10, 10)):
+        """Text density grid features"""
+        h, w = image.shape
+        features = []
+        for i in range(grid_size[0]):
+            for j in range(grid_size[1]):
+                cell = image[i*h//grid_size[0]:(i+1)*h//grid_size[0],
+                             j*w//grid_size[1]:(j+1)*w//grid_size[1]]
+                features.append(np.sum(cell)/(255 * cell.size))
+        return np.array(features)
+
+    def deskew(self, image):
+        """Automatic deskewing based on text lines"""
+        # ... (same deskew function from previous example)
+        return deskewed_image
+
+    def classify_document(self, image_path):
+        """Classify document and update templates if needed"""
+        # Extract features and normalize
+        features = self.process_image(image_path)
+        scaled_features = self.scaler.transform([features])
+        
+        if len(self.templates) > 0:
+            # Compare with existing templates
+            distances = pairwise_distances(
+                scaled_features,
+                self.scaler.transform(np.array(self.templates))
+            
+            min_distance = np.min(distances)
+            template_idx = np.argmin(distances)
+            
+            if min_distance <= self.threshold:
+                return template_idx
+            else:
+                # Add new template
+                self.templates.append(features)
+                self.scaler.partial_fit([features])
+                return len(self.templates) - 1
+        else:
+            # First template
+            self.templates.append(features)
+            return 0
+
+# Usage example
+initial_templates = ["template1.jpg", "template2.jpg", "template3.jpg"]
+classifier = DocumentClassifier(initial_templates, threshold=3.0)
+
+results = {}
+for doc_path in document_paths:  # List of 100 document paths
+    template_id = classifier.classify_document(doc_path)
+    results[doc_path] = template_id
+
+# Print results
+print("Final number of templates:", len(classifier.templates))
+for doc, tid in results.items():
+    print(f"{doc} -> Template {tid}")
