@@ -1,106 +1,26 @@
 import cv2
+from skimage.metrics import structural_similarity as ssim
 import numpy as np
-from sklearn.metrics import pairwise_distances
-from sklearn.preprocessing import StandardScaler
+from PIL import Image
+import imagehash
 
-class DocumentClassifier:
-    def __init__(self, initial_templates, threshold=3.0):
-        self.templates = []
-        self.threshold = threshold
-        self.scaler = StandardScaler()
-        
-        # Initialize with first 3 templates
-        for path in initial_templates:
-            features = self.process_image(path)
-            self.templates.append(features)
-        
-        # Fit scaler on initial templates
-        self.scaler.fit(np.array(self.templates))
+# Load the images in grayscale
+img1 = cv2.imread('document1.jpg', cv2.IMREAD_GRAYSCALE)
+img2 = cv2.imread('document2.jpg', cv2.IMREAD_GRAYSCALE)
 
-    def process_image(self, image_path):
-        """Preprocess and extract features from document"""
-        # Read and deskew
-        img = cv2.imread(image_path)
-        img = self.deskew(img)
-        
-        # Resize and binarize
-        img = cv2.resize(img, (1000, 1000))
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
-        
-        # Feature extraction
-        features = np.concatenate([
-            self.hu_moments(binary),
-            self.projection_features(binary),
-            self.grid_features(binary, grid_size=(10, 10))
-        ])
-        return features
+# Optionally, resize to the same dimensions (if necessary)
+img1 = cv2.resize(img1, (600, 800))
+img2 = cv2.resize(img2, (600, 800))
 
-    def hu_moments(self, image):
-        """Rotation-invariant moment features"""
-        moments = cv2.moments(image)
-        hu = cv2.HuMoments(moments).flatten()
-        return -np.sign(hu) * np.log10(np.abs(hu))
+# Apply thresholding to convert images to binary
+_, thresh1 = cv2.threshold(img1, 127, 255, cv2.THRESH_BINARY)
+_, thresh2 = cv2.threshold(img2, 127, 255, cv2.THRESH_BINARY)
 
-    def projection_features(self, image):
-        """Horizontal/vertical projection profiles with smoothing"""
-        horizontal = cv2.blur(np.sum(image, axis=1)/255, (5,))
-        vertical = cv2.blur(np.sum(image, axis=0)/255, (5,))
-        return np.concatenate([horizontal, vertical])
+# Compute the Structural Similarity Index (SSIM)
+score, diff = ssim(thresh1, thresh2, full=True)
+print("SSIM score:", score)
 
-    def grid_features(self, image, grid_size=(10, 10)):
-        """Text density grid features"""
-        h, w = image.shape
-        features = []
-        for i in range(grid_size[0]):
-            for j in range(grid_size[1]):
-                cell = image[i*h//grid_size[0]:(i+1)*h//grid_size[0],
-                             j*w//grid_size[1]:(j+1)*w//grid_size[1]]
-                features.append(np.sum(cell)/(255 * cell.size))
-        return np.array(features)
-
-    def deskew(self, image):
-        """Automatic deskewing based on text lines"""
-        # ... (same deskew function from previous example)
-        return deskewed_image
-
-    def classify_document(self, image_path):
-        """Classify document and update templates if needed"""
-        # Extract features and normalize
-        features = self.process_image(image_path)
-        scaled_features = self.scaler.transform([features])
-        
-        if len(self.templates) > 0:
-            # Compare with existing templates
-            distances = pairwise_distances(
-                scaled_features,
-                self.scaler.transform(np.array(self.templates))
-            
-            min_distance = np.min(distances)
-            template_idx = np.argmin(distances)
-            
-            if min_distance <= self.threshold:
-                return template_idx
-            else:
-                # Add new template
-                self.templates.append(features)
-                self.scaler.partial_fit([features])
-                return len(self.templates) - 1
-        else:
-            # First template
-            self.templates.append(features)
-            return 0
-
-# Usage example
-initial_templates = ["template1.jpg", "template2.jpg", "template3.jpg"]
-classifier = DocumentClassifier(initial_templates, threshold=3.0)
-
-results = {}
-for doc_path in document_paths:  # List of 100 document paths
-    template_id = classifier.classify_document(doc_path)
-    results[doc_path] = template_id
-
-# Print results
-print("Final number of templates:", len(classifier.templates))
-for doc, tid in results.items():
-    print(f"{doc} -> Template {tid}")
+# Compute perceptual hashes and compare them
+hash1 = imagehash.average_hash(Image.fromarray(thresh1))
+hash2 = imagehash.average_hash(Image.fromarray(thresh2))
+print("Hash difference:", hash1 - hash2)
