@@ -1,69 +1,48 @@
 import cv2
 import numpy as np
 
-# Load image and convert to grayscale
-img = cv2.imread("scanned_document.jpg")
-gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-# Edge detection
-edges = cv2.Canny(gray, 50, 150, apertureSize=3)
-
-# Hough transform to detect lines
-lines = cv2.HoughLines(edges, 1, np.pi / 180, threshold=200)
-
-# Calculate the dominant angle
-angles = []
-if lines is not None:
-    for line in lines:
-        rho, theta = line[0]
-        angle = np.degrees(theta)
-        # Map angle to range [-90, 90]
-        if angle > 90:
-            angle -= 180
-        angles.append(angle)
-
-# Compute the median angle as the dominant skew
-if angles:
-    dominant_angle = np.median(angles)
-    print("Dominant angle (degrees):", dominant_angle)
-else:
-    print("No lines detected")
-
-# Interpretation:
-# If dominant_angle is near ±90, then the document is rotated 90°.
-# Positive angle might indicate one rotation direction, negative the other.
-
-
-
-import cv2
-import numpy as np
-
 def detect_rotation(image_path):
+    # Load image and preprocess
     img = cv2.imread(image_path)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
-    # Horizontal vs. vertical text detection
+    # Compute horizontal and vertical projections
     horizontal_proj = np.sum(binary, axis=1)
     vertical_proj = np.sum(binary, axis=0)
-    horizontal_var, vertical_var = np.var(horizontal_proj), np.var(vertical_proj)
+    
+    # Determine text direction (horizontal or vertical)
+    horizontal_var = np.var(horizontal_proj)
+    vertical_var = np.var(vertical_proj)
 
     if horizontal_var > vertical_var:
-        # Check 0° or 180° via baseline position
+        # Check for 0° or 180° using baseline detection
         peaks = np.where(horizontal_proj > np.mean(horizontal_proj) + 20)[0]
         if len(peaks) == 0:
             return 0  # Fallback if no lines detected
-        baseline_positions = [np.argmax(np.sum(binary[p:p+20, :], axis=1)) + p for p in peaks]
+        
+        baseline_positions = []
+        for p in peaks:
+            line_roi = binary[p:p+20, :]  # Adjust 20 based on line height
+            line_proj = np.sum(line_roi, axis=1)
+            baseline = np.argmax(line_proj) + p
+            baseline_positions.append(baseline)
+        
         avg_baseline = np.mean(baseline_positions)
-        return 0 if avg_baseline > np.mean(peaks) else 180
+        avg_peak = np.mean(peaks)
+        return 0 if avg_baseline > avg_peak else 180
     else:
-        # Distinguish 90° vs 270° using gradient direction
+        # Check for 90° vs 270° using gradient direction
         sobel_x = cv2.Sobel(binary, cv2.CV_64F, 1, 0, ksize=3)
         gradient_strength = np.mean(sobel_x, axis=0)
-        left_gradient = np.mean(gradient_strength[:len(gradient_strength)//2])
-        right_gradient = np.mean(gradient_strength[len(gradient_strength)//2:])
-        return 90 if left_gradient > right_gradient else 270
+        
+        # Split into left and right halves
+        mid = len(gradient_strength) // 2
+        left_grad = np.mean(gradient_strength[:mid])
+        right_grad = np.mean(gradient_strength[mid:])
+        
+        return 90 if left_grad > right_grad else 270
 
 # Example usage
-rotation = detect_rotation("scanned_document.jpg")
-print(f"Detected rotation: {rotation}°")
+rotation_angle = detect_rotation("scanned_doc.jpg")
+print(f"Detected Rotation: {rotation_angle}°")
