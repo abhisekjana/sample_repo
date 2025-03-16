@@ -1,26 +1,47 @@
 import cv2
-from skimage.metrics import structural_similarity as ssim
 import numpy as np
-from PIL import Image
-import imagehash
 
-# Load the images in grayscale
-img1 = cv2.imread('document1.jpg', cv2.IMREAD_GRAYSCALE)
-img2 = cv2.imread('document2.jpg', cv2.IMREAD_GRAYSCALE)
+def detect_rotation(image_path):
+    # Load image, convert to grayscale, and binarize
+    img = cv2.imread(image_path)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
-# Optionally, resize to the same dimensions (if necessary)
-img1 = cv2.resize(img1, (600, 800))
-img2 = cv2.resize(img2, (600, 800))
+    # Calculate horizontal and vertical projections
+    horizontal_projection = np.sum(binary, axis=1)
+    vertical_projection = np.sum(binary, axis=0)
 
-# Apply thresholding to convert images to binary
-_, thresh1 = cv2.threshold(img1, 127, 255, cv2.THRESH_BINARY)
-_, thresh2 = cv2.threshold(img2, 127, 255, cv2.THRESH_BINARY)
+    # Determine if text is horizontal or vertical
+    horizontal_var = np.var(horizontal_projection)
+    vertical_var = np.var(vertical_projection)
 
-# Compute the Structural Similarity Index (SSIM)
-score, diff = ssim(thresh1, thresh2, full=True)
-print("SSIM score:", score)
+    if horizontal_var > vertical_var:
+        # Check for 0° or 180° rotation using baseline detection
+        line_spacing = 20  # Adjust based on document
+        peaks = np.where(horizontal_projection > np.mean(horizontal_projection) + line_spacing)[0]
 
-# Compute perceptual hashes and compare them
-hash1 = imagehash.average_hash(Image.fromarray(thresh1))
-hash2 = imagehash.average_hash(Image.fromarray(thresh2))
-print("Hash difference:", hash1 - hash2)
+        baseline_positions = []
+        for peak in peaks:
+            line_roi = binary[peak:peak+line_spacing, :]
+            line_projection = np.sum(line_roi, axis=1)
+            baseline = np.argmax(line_projection) + peak
+            baseline_positions.append(baseline)
+
+        avg_baseline = np.mean(baseline_positions)
+        line_height = np.max(peaks) - np.min(peaks)
+        if avg_baseline > line_height / 2:
+            return 0  # Baseline at bottom (0°)
+        else:
+            return 180  # Baseline at top (180°)
+    else:
+        # Check aspect ratio for 90° vs 270° (assuming original is portrait)
+        height, width = img.shape[:2]
+        if width > height:
+            return 90
+        else:
+            return 270
+
+# Example usage
+image_path = "scanned_document.jpg"
+rotation = detect_rotation(image_path)
+print(f"Detected rotation: {rotation}°")
