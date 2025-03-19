@@ -1,48 +1,60 @@
 import cv2
-import numpy as np
 
-def detect_rotation(image_path):
-    # Load image and preprocess
-    img = cv2.imread(image_path)
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-
-    # Compute horizontal and vertical projections
-    horizontal_proj = np.sum(binary, axis=1)
-    vertical_proj = np.sum(binary, axis=0)
+def split_image_with_overlap(image, overlap_percent=0.1):
+    """
+    Split an image into 4 overlapping quadrants.
     
-    # Determine text direction (horizontal or vertical)
-    horizontal_var = np.var(horizontal_proj)
-    vertical_var = np.var(vertical_proj)
+    Args:
+        image: Input image (numpy array)
+        overlap_percent: Percentage of overlap between crops (0-1)
+        
+    Returns:
+        List of 4 cropped images in order:
+        [top-left, top-right, bottom-left, bottom-right]
+    """
+    # Validate overlap percentage
+    if overlap_percent < 0 or overlap_percent >= 0.5:
+        raise ValueError("Overlap percentage must be between 0 (inclusive) and 0.5 (exclusive)")
+    
+    # Get image dimensions
+    h, w = image.shape[:2]
+    
+    # Calculate overlap in pixels
+    overlap_x = int(w * overlap_percent)
+    overlap_y = int(h * overlap_percent)
+    
+    # Calculate crop dimensions (40% bigger than simple quadrant to allow overlap)
+    crop_width = w // 2 + overlap_x
+    crop_height = h // 2 + overlap_y
+    
+    # Define starting coordinates for each crop
+    x_coords = [
+        0,                # Left
+        w - crop_width    # Right
+    ]
+    
+    y_coords = [
+        0,                # Top
+        h - crop_height   # Bottom
+    ]
+    
+    # Generate crops
+    crops = []
+    for y in y_coords:
+        for x in x_coords:
+            crop = image[y:y+crop_height, x:x+crop_width]
+            crops.append(crop)
+    
+    return crops
 
-    if horizontal_var > vertical_var:
-        # Check for 0° or 180° using baseline detection
-        peaks = np.where(horizontal_proj > np.mean(horizontal_proj) + 20)[0]
-        if len(peaks) == 0:
-            return 0  # Fallback if no lines detected
-        
-        baseline_positions = []
-        for p in peaks:
-            line_roi = binary[p:p+20, :]  # Adjust 20 based on line height
-            line_proj = np.sum(line_roi, axis=1)
-            baseline = np.argmax(line_proj) + p
-            baseline_positions.append(baseline)
-        
-        avg_baseline = np.mean(baseline_positions)
-        avg_peak = np.mean(peaks)
-        return 0 if avg_baseline > avg_peak else 180
-    else:
-        # Check for 90° vs 270° using gradient direction
-        sobel_x = cv2.Sobel(binary, cv2.CV_64F, 1, 0, ksize=3)
-        gradient_strength = np.mean(sobel_x, axis=0)
-        
-        # Split into left and right halves
-        mid = len(gradient_strength) // 2
-        left_grad = np.mean(gradient_strength[:mid])
-        right_grad = np.mean(gradient_strength[mid:])
-        
-        return 90 if left_grad > right_grad else 270
-
-# Example usage
-rotation_angle = detect_rotation("scanned_doc.jpg")
-print(f"Detected Rotation: {rotation_angle}°")
+# Example usage:
+if __name__ == "__main__":
+    # Load image
+    img = cv2.imread("input_image.jpg")
+    
+    # Split with 15% overlap
+    crops = split_image_with_overlap(img, overlap_percent=0.15)
+    
+    # Save crops
+    for i, crop in enumerate(crops):
+        cv2.imwrite(f"crop_{i}.jpg", crop)
