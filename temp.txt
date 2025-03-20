@@ -1,42 +1,28 @@
-from sentence_transformers import SentenceTransformer
-import umap
-import hdbscan
-import matplotlib.pyplot as plt
+\documentclass{article}
+\usepackage{amsmath}
+\begin{document}
 
-# 1. Generate embeddings
-model = SentenceTransformer('all-MiniLM-L6-v2')
-embeddings = model.encode(your_ocr_texts)
+Let:
+\begin{itemize}
+    \item \( c \) be the normalized mean OCR confidence (with \( c \in [0,1] \)),
+    \item \( p \) be the cluster success rate (with \( p \in [0,1] \)),
+    \item \( f(n) \) be the weight function based on the sample size \( n \) (with \( f(n) \in [0,1] \)), and
+    \item \( \alpha(c) \) be a dynamic weight on the OCR confidence defined as:
+    \[
+    \alpha(c) = 1 - c.
+    \]
+\end{itemize}
 
-# 2. Reduce to 2D
-reducer = umap.UMAP(n_components=2, metric='cosine', random_state=42)
-embeddings_2d = reducer.fit_transform(embeddings)
+Then, the overall confidence score \( S \) is given by:
+\[
+S = \alpha(c) \cdot c + \bigl[1-\alpha(c)\bigr] \cdot \left[f(n) \cdot p\right].
+\]
 
-# 3. Cluster with HDBSCAN
-clusterer = hdbscan.HDBSCAN(min_cluster_size=10, metric='euclidean')
-cluster_labels = clusterer.fit_predict(embeddings_2d)
+Substituting \(\alpha(c) = 1-c\) into the equation:
+\[
+S = (1-c) \cdot c + c \cdot \left[f(n) \cdot p\right].
+\]
 
-# 4. Plot with legend
-plt.figure(figsize=(10, 8))
-scatter = plt.scatter(
-    embeddings_2d[:, 0], embeddings_2d[:, 1],
-    c=cluster_labels, cmap='Spectral', s=20, alpha=0.5, edgecolors='w', linewidth=0.3
-)
+This ensures that \( S \) remains in the range \([0,1]\) as long as \( c \), \( p \), and \( f(n) \) are within \([0,1]\).
 
-# Create legend
-unique_labels = np.unique(cluster_labels)
-legend_labels = []
-for label in unique_labels:
-    if label == -1:
-        color = (0.5, 0.5, 0.5, 1)
-        name = "Noise"
-    else:
-        color = plt.cm.Spectral(label / (len(unique_labels) - 1))
-        name = f"Cluster {label}"
-    legend_labels.append(
-        plt.Line2D([0], [0], marker='o', color='w', label=name, 
-                   markersize=10, markerfacecolor=color, alpha=0.6)
-    )
-
-plt.legend(handles=legend_labels, bbox_to_anchor=(1.05, 1), loc='upper left')
-plt.title("Clustered OCR Pages")
-plt.show()
+\end{document}
