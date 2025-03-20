@@ -1,28 +1,9 @@
-\documentclass{article}
-\usepackage{amsmath}
-\begin{document}
+\[
+\alpha(c) = \frac{1}{1 + e^{k (c - 0.93)}},
+\]
+where a higher \( k \) yields a sharper transition around \( c = 0.93 \).
 
-Let:
-\begin{itemize}
-    \item \( c \) be the normalized mean OCR confidence (with \( c \in [0,1] \)),
-    \item \( p \) be the cluster success rate (with \( p \in [0,1] \)),
-    \item \( f(n) \) be the weight function based on the sample size \( n \) (with \( f(n) \in [0,1] \)), and
-    \item \( \alpha(c) \) be a dynamic weight on the OCR confidence defined as:
-    \[
-    \alpha(c) = 1 - c.
-    \]
-\end{itemize}
-
-Then, the overall confidence score \( S \) is given by:
+% Define the overall confidence score:
 \[
 S = \alpha(c) \cdot c + \bigl[1-\alpha(c)\bigr] \cdot \left[f(n) \cdot p\right].
 \]
-
-Substituting \(\alpha(c) = 1-c\) into the equation:
-\[
-S = (1-c) \cdot c + c \cdot \left[f(n) \cdot p\right].
-\]
-
-This ensures that \( S \) remains in the range \([0,1]\) as long as \( c \), \( p \), and \( f(n) \) are within \([0,1]\).
-
-\end{document}
