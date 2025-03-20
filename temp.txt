@@ -1,60 +1,42 @@
-import cv2
+from sentence_transformers import SentenceTransformer
+import umap
+import hdbscan
+import matplotlib.pyplot as plt
 
-def split_image_with_overlap(image, overlap_percent=0.1):
-    """
-    Split an image into 4 overlapping quadrants.
-    
-    Args:
-        image: Input image (numpy array)
-        overlap_percent: Percentage of overlap between crops (0-1)
-        
-    Returns:
-        List of 4 cropped images in order:
-        [top-left, top-right, bottom-left, bottom-right]
-    """
-    # Validate overlap percentage
-    if overlap_percent < 0 or overlap_percent >= 0.5:
-        raise ValueError("Overlap percentage must be between 0 (inclusive) and 0.5 (exclusive)")
-    
-    # Get image dimensions
-    h, w = image.shape[:2]
-    
-    # Calculate overlap in pixels
-    overlap_x = int(w * overlap_percent)
-    overlap_y = int(h * overlap_percent)
-    
-    # Calculate crop dimensions (40% bigger than simple quadrant to allow overlap)
-    crop_width = w // 2 + overlap_x
-    crop_height = h // 2 + overlap_y
-    
-    # Define starting coordinates for each crop
-    x_coords = [
-        0,                # Left
-        w - crop_width    # Right
-    ]
-    
-    y_coords = [
-        0,                # Top
-        h - crop_height   # Bottom
-    ]
-    
-    # Generate crops
-    crops = []
-    for y in y_coords:
-        for x in x_coords:
-            crop = image[y:y+crop_height, x:x+crop_width]
-            crops.append(crop)
-    
-    return crops
+# 1. Generate embeddings
+model = SentenceTransformer('all-MiniLM-L6-v2')
+embeddings = model.encode(your_ocr_texts)
 
-# Example usage:
-if __name__ == "__main__":
-    # Load image
-    img = cv2.imread("input_image.jpg")
-    
-    # Split with 15% overlap
-    crops = split_image_with_overlap(img, overlap_percent=0.15)
-    
-    # Save crops
-    for i, crop in enumerate(crops):
-        cv2.imwrite(f"crop_{i}.jpg", crop)
+# 2. Reduce to 2D
+reducer = umap.UMAP(n_components=2, metric='cosine', random_state=42)
+embeddings_2d = reducer.fit_transform(embeddings)
+
+# 3. Cluster with HDBSCAN
+clusterer = hdbscan.HDBSCAN(min_cluster_size=10, metric='euclidean')
+cluster_labels = clusterer.fit_predict(embeddings_2d)
+
+# 4. Plot with legend
+plt.figure(figsize=(10, 8))
+scatter = plt.scatter(
+    embeddings_2d[:, 0], embeddings_2d[:, 1],
+    c=cluster_labels, cmap='Spectral', s=20, alpha=0.5, edgecolors='w', linewidth=0.3
+)
+
+# Create legend
+unique_labels = np.unique(cluster_labels)
+legend_labels = []
+for label in unique_labels:
+    if label == -1:
+        color = (0.5, 0.5, 0.5, 1)
+        name = "Noise"
+    else:
+        color = plt.cm.Spectral(label / (len(unique_labels) - 1))
+        name = f"Cluster {label}"
+    legend_labels.append(
+        plt.Line2D([0], [0], marker='o', color='w', label=name, 
+                   markersize=10, markerfacecolor=color, alpha=0.6)
+    )
+
+plt.legend(handles=legend_labels, bbox_to_anchor=(1.05, 1), loc='upper left')
+plt.title("Clustered OCR Pages")
+plt.show()
