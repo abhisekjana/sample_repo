@@ -1,9 +1,65 @@
-\[
-\alpha(c) = \frac{1}{1 + e^{k (c - 0.93)}},
-\]
-where a higher \( k \) yields a sharper transition around \( c = 0.93 \).
+from typing import Any, Dict, List, Optional
+from langchain_community.llms.huggingface_pipeline import HuggingFacePipeline
+from langchain_core.outputs import Generation, LLMResult
 
-% Define the overall confidence score:
-\[
-S = \alpha(c) \cdot c + \bigl[1-\alpha(c)\bigr] \cdot \left[f(n) \cdot p\right].
-\]
+class CustomHuggingFacePipeline(HuggingFacePipeline):
+    def _call(
+        self,
+        prompt: str,
+        stop: Optional[List[str]] = None,
+        **kwargs: Any,
+    ) -> str:
+        # Override to return full model output (including scores)
+        response = self.pipeline(
+            prompt,
+            return_full_text=False,  # Only return new tokens (not input)
+            return_dict_in_generate=True,
+            output_scores=True,  # Critical for log probabilities
+            **kwargs,
+        )
+        
+        # Extract the generated text and scores
+        generated_text = response["generated_text"]
+        self.generation_info = {
+            "model_output": response  # Save full Hugging Face output
+        }
+        return generated_text
+
+    @property
+    def _identifying_params(self) -> Dict[str, Any]:
+        return {"model": self.pipeline.model}
+
+
+# Invoke the chain
+response = chain.invoke({"topic": "cats"})
+
+# Extract the Hugging Face model output from the custom LLM
+hf_output = response.additional_kwargs.get("model_output", None)
+
+if hf_output:
+    # Get logits (scores) for generated tokens
+    scores = hf_output.scores  # List of tensors with shape [1, vocab_size]
+    
+    # Convert logits to log probabilities
+    import torch
+    log_probs = [
+        torch.log_softmax(token_scores.squeeze(), dim=-1) 
+        for token_scores in scores
+    ]
+    
+    # Get token IDs of the generated sequence
+    generated_token_ids = hf_output.sequences[0][-len(scores):]
+    
+    # Extract log probabilities of the chosen tokens
+    token_logprobs = [
+        logprob[token_id].item() 
+        for logprob, token_id in zip(log_probs, generated_token_ids)
+    ]
+    
+    # Decode tokens to text
+    tokens = tokenizer.convert_ids_to_tokens(generated_token_ids)
+    
+    print("Tokens:", tokens)
+    print("Log Probabilities:", token_logprobs)
+else:
+    print("Log probabilities not found in response.")
