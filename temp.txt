@@ -1,65 +1,39 @@
-from typing import Any, Dict, List, Optional
-from langchain_community.llms.huggingface_pipeline import HuggingFacePipeline
-from langchain_core.outputs import Generation, LLMResult
+from typing import Any, List, Optional, Dict
+from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_community.chat_models.huggingface import ChatHuggingFace
 
-class CustomHuggingFacePipeline(HuggingFacePipeline):
-    def _call(
+class LogprobChatHuggingFace(ChatHuggingFace):
+    def _generate(
         self,
-        prompt: str,
+        messages: List[BaseMessage],
         stop: Optional[List[str]] = None,
         **kwargs: Any,
-    ) -> str:
-        # Override to return full model output (including scores)
-        response = self.pipeline(
-            prompt,
-            return_full_text=False,  # Only return new tokens (not input)
+    ) -> ChatResult:
+        # Force return_full_text=False to isolate new tokens
+        response = self.llm.client(
+            [self._to_chat_prompt(messages)],
+            stop=stop,
+            return_full_text=False,  # Critical for token alignment
             return_dict_in_generate=True,
-            output_scores=True,  # Critical for log probabilities
+            output_scores=True,
             **kwargs,
         )
-        
-        # Extract the generated text and scores
-        generated_text = response["generated_text"]
-        self.generation_info = {
-            "model_output": response  # Save full Hugging Face output
-        }
-        return generated_text
+
+        # Extract generated text
+        generated_text = response["generated_text"][0]
+
+        # Store Hugging Face's raw output in ChatGeneration
+        return ChatResult(
+            generations=[
+                ChatGeneration(
+                    message=AIMessage(content=generated_text),
+                    generation_info={
+                        "hf_output": response  # Raw model output here
+                    }
+                )
+            ]
+        )
 
     @property
-    def _identifying_params(self) -> Dict[str, Any]:
-        return {"model": self.pipeline.model}
-
-
-# Invoke the chain
-response = chain.invoke({"topic": "cats"})
-
-# Extract the Hugging Face model output from the custom LLM
-hf_output = response.additional_kwargs.get("model_output", None)
-
-if hf_output:
-    # Get logits (scores) for generated tokens
-    scores = hf_output.scores  # List of tensors with shape [1, vocab_size]
-    
-    # Convert logits to log probabilities
-    import torch
-    log_probs = [
-        torch.log_softmax(token_scores.squeeze(), dim=-1) 
-        for token_scores in scores
-    ]
-    
-    # Get token IDs of the generated sequence
-    generated_token_ids = hf_output.sequences[0][-len(scores):]
-    
-    # Extract log probabilities of the chosen tokens
-    token_logprobs = [
-        logprob[token_id].item() 
-        for logprob, token_id in zip(log_probs, generated_token_ids)
-    ]
-    
-    # Decode tokens to text
-    tokens = tokenizer.convert_ids_to_tokens(generated_token_ids)
-    
-    print("Tokens:", tokens)
-    print("Log Probabilities:", token_logprobs)
-else:
-    print("Log probabilities not found in response.")
+    def _llm_type(self) -> str:
+        return "huggingface_chat_with_logprobs"
