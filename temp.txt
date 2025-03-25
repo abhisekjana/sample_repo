@@ -1,72 +1,44 @@
+from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
 import torch.nn.functional as F
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
-from langchain_huggingface import HuggingFacePipeline, ChatHuggingFace
-from langchain.schema import AIMessage
 
-# Create a custom HuggingFacePipeline subclass that passes through the extra output.
-class CustomHuggingFacePipeline(HuggingFacePipeline):
-    def _generate(self, prompt: str, **kwargs):
-        # Ensure that output_scores and return_dict_in_generate are enabled.
-        result = self.pipeline(
-            prompt,
-            output_scores=True,
-            return_dict_in_generate=True,
-            **kwargs
-        )
-        # Return the full dictionary, which includes both generated text and scores.
-        return result
-
-# Create a custom ChatHuggingFace subclass that attaches the full output to the response metadata.
-class CustomChatHuggingFace(ChatHuggingFace):
-    def invoke(self, messages, **kwargs):
-        # Convert messages to a prompt string (this depends on your prompt template)
-        # For simplicity, we assume messages is a simple string prompt.
-        prompt = messages if isinstance(messages, str) else str(messages)
-        # Generate output using our custom pipeline.
-        result = self.llm._generate(prompt, **kwargs)
-        
-        # Create an AIMessage with the generated text.
-        # We assume the generated text is in result["sequences"].
-        generated_text = result["sequences"][0]
-        # Optionally, you can process the scores here.
-        # For example, convert the logits of the first token to log probabilities:
-        if "scores" in result and result["scores"]:
-            first_token_logits = result["scores"][0]
-            log_probs = F.log_softmax(torch.tensor(first_token_logits), dim=-1)
-        else:
-            log_probs = None
-
-        # Build your message and attach the extra metadata.
-        message = AIMessage(content=generated_text)
-        message.response_metadata = {
-            "full_output": result,
-            "first_token_log_probs": log_probs,
-        }
-        return message
-
-# Example usage:
-model_name = "gpt2"  # Replace with your local model's identifier or path
+# Load the model and tokenizer
+model_name = "meta-llama/Meta-Llama-3-8B"  # Adjust based on your model
 tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModelForCausalLM.from_pretrained(model_name, local_files_only=True)
+model = AutoModelForCausalLM.from_pretrained(
+    model_name,
+    device_map="auto",
+    torch_dtype=torch.bfloat16  # Use float16 if bfloat16 isn't supported
+)
+model.eval()
 
-# Create a Hugging Face pipeline with the desired settings.
-hf_pipeline = pipeline(
-    "text-generation",
-    model=model,
-    tokenizer=tokenizer,
-    max_new_tokens=50,
-    # Do not forget to set these so that scores are returned!
-    output_scores=True,
+# Tokenize input prompt
+prompt = "The capital of France is"
+input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(model.device)
+
+# Generate text with output scores
+output = model.generate(
+    input_ids,
+    max_new_tokens=5,  # Number of new tokens to generate
     return_dict_in_generate=True,
+    output_scores=True,
 )
 
-# Wrap it using our custom wrapper.
-custom_pipeline = CustomHuggingFacePipeline(pipeline=hf_pipeline)
-custom_chat_model = CustomChatHuggingFace(llm=custom_pipeline)
+# Extract generated tokens (excluding the input)
+generated_sequence = output.sequences[0]
+input_length = input_ids.shape[1]
+generated_tokens = generated_sequence[input_length:]
 
-# Invoke the model.
-response = custom_chat_model.invoke("How are you today?")
-print("Response:", response.content)
-if response.response_metadata["first_token_log_probs"] is not None:
-    print("Log probabilities for first token:", response.response_metadata["first_token_log_probs"])
+# Calculate log probabilities for each generated token
+log_probs = []
+for i, token in enumerate(generated_tokens):
+    # Get logits for the i-th generated token
+    logits = output.scores[i][0]  # Shape: [vocab_size]
+    # Compute log probabilities using log_softmax
+    log_prob = F.log_softmax(logits, dim=-1)[token].item()
+    log_probs.append(log_prob)
+
+# Decode and print results
+print("Generated Text:", tokenizer.decode(generated_sequence, skip_special_tokens=True))
+print("Generated Tokens:", tokenizer.convert_ids_to_tokens(generated_tokens))
+print("Log Probabilities:", log_probs)
