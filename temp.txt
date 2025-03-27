@@ -1,44 +1,200 @@
-from transformers import AutoTokenizer, AutoModelForCausalLM
-import torch
-import torch.nn.functional as F
+Okay, here's Python code using numpy (which is standard in ML workflows) to calculate both the summary statistics and the specified bin counts for a list of confidence scores.
 
-# Load the model and tokenizer
-model_name = "meta-llama/Meta-Llama-3-8B"  # Adjust based on your model
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModelForCausalLM.from_pretrained(
-    model_name,
-    device_map="auto",
-    torch_dtype=torch.bfloat16  # Use float16 if bfloat16 isn't supported
-)
-model.eval()
+import numpy as np
+from typing import List, Dict, Union
 
-# Tokenize input prompt
-prompt = "The capital of France is"
-input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(model.device)
+# Define the type alias for numerical values (int or float)
+Numeric = Union[int, float]
 
-# Generate text with output scores
-output = model.generate(
-    input_ids,
-    max_new_tokens=5,  # Number of new tokens to generate
-    return_dict_in_generate=True,
-    output_scores=True,
-)
+def calculate_summary_stats(confidences: List[Numeric], 
+                            low_conf_threshold: float = 80.0) -> Dict[str, float]:
+    """
+    Calculates summary statistics for a list of confidence scores.
 
-# Extract generated tokens (excluding the input)
-generated_sequence = output.sequences[0]
-input_length = input_ids.shape[1]
-generated_tokens = generated_sequence[input_length:]
+    Args:
+        confidences: A list of confidence scores (ranging from 0 to 100).
+        low_conf_threshold: The threshold below which a score is considered low confidence.
 
-# Calculate log probabilities for each generated token
-log_probs = []
-for i, token in enumerate(generated_tokens):
-    # Get logits for the i-th generated token
-    logits = output.scores[i][0]  # Shape: [vocab_size]
-    # Compute log probabilities using log_softmax
-    log_prob = F.log_softmax(logits, dim=-1)[token].item()
-    log_probs.append(log_prob)
+    Returns:
+        A dictionary containing summary statistics:
+        - conf_mean: Mean confidence.
+        - conf_median: Median confidence.
+        - conf_min: Minimum confidence.
+        - conf_max: Maximum confidence.
+        - conf_std_dev: Standard deviation of confidence scores.
+        - conf_range: Range (max - min) of confidence scores.
+        - conf_count: Total number of confidence scores (length of the entity).
+        - conf_low_count: Count of scores below the low_conf_threshold.
+        - conf_low_ratio: Ratio of scores below the low_conf_threshold.
+        Returns NaN for statistics if the input list is empty, except for counts/ratio which are 0.
+    """
+    if not confidences:
+        # Handle empty list case
+        return {
+            'conf_mean': np.nan,
+            'conf_median': np.nan,
+            'conf_min': np.nan,
+            'conf_max': np.nan,
+            'conf_std_dev': np.nan,
+            'conf_range': np.nan,
+            'conf_count': 0,
+            'conf_low_count': 0,
+            'conf_low_ratio': 0.0
+        }
 
-# Decode and print results
-print("Generated Text:", tokenizer.decode(generated_sequence, skip_special_tokens=True))
-print("Generated Tokens:", tokenizer.convert_ids_to_tokens(generated_tokens))
-print("Log Probabilities:", log_probs)
+    conf_array = np.array(confidences)
+    
+    # Calculate basic statistics
+    mean_conf = np.mean(conf_array)
+    median_conf = np.median(conf_array)
+    min_conf = np.min(conf_array)
+    max_conf = np.max(conf_array)
+    std_dev_conf = np.std(conf_array) # Use np.std for population std dev if desired
+    range_conf = np.ptp(conf_array) # Peak-to-peak (max - min)
+    count_conf = len(conf_array)
+    
+    # Calculate low confidence stats
+    low_conf_mask = conf_array < low_conf_threshold
+    low_conf_count = np.sum(low_conf_mask)
+    low_conf_ratio = low_conf_count / count_conf if count_conf > 0 else 0.0
+
+    return {
+        'conf_mean': float(mean_conf),
+        'conf_median': float(median_conf),
+        'conf_min': float(min_conf),
+        'conf_max': float(max_conf),
+        'conf_std_dev': float(std_dev_conf),
+        'conf_range': float(range_conf),
+        'conf_count': int(count_conf),
+        'conf_low_count': int(low_conf_count),
+        'conf_low_ratio': float(low_conf_ratio)
+    }
+
+
+def calculate_binned_counts(confidences: List[Numeric], 
+                             normalize: bool = False) -> Dict[str, Union[int, float]]:
+    """
+    Calculates the count (or ratio) of confidence scores falling into predefined bins.
+
+    Bins: [0-70], [71-85], [86-95], [96-100]
+
+    Args:
+        confidences: A list of confidence scores (ranging from 0 to 100).
+        normalize: If True, return the ratio of scores in each bin instead of counts.
+
+    Returns:
+        A dictionary containing the count or ratio for each bin:
+        - conf_bin_0_70: Count/Ratio in [0, 70] range.
+        - conf_bin_71_85: Count/Ratio in [71, 85] range.
+        - conf_bin_86_95: Count/Ratio in [86, 95] range.
+        - conf_bin_96_100: Count/Ratio in [96, 100] range.
+    """
+    bin_counts = {
+        'conf_bin_0_70': 0,
+        'conf_bin_71_85': 0,
+        'conf_bin_86_95': 0,
+        'conf_bin_96_100': 0,
+    }
+    
+    total_count = len(confidences)
+    if total_count == 0:
+        # Return zero counts or ratios if input is empty
+         return bin_counts if not normalize else {k: 0.0 for k in bin_counts}
+
+
+    for score in confidences:
+        # Ensure score is within expected 0-100 range for binning logic
+        # You might want stricter validation depending on your data source
+        score = max(0, min(100, score)) 
+        
+        if 0 <= score <= 70:
+            bin_counts['conf_bin_0_70'] += 1
+        elif 71 <= score <= 85:
+            bin_counts['conf_bin_71_85'] += 1
+        elif 86 <= score <= 95:
+            bin_counts['conf_bin_86_95'] += 1
+        elif 96 <= score <= 100:
+             bin_counts['conf_bin_96_100'] += 1
+        # else: # Optional: handle unexpected scores outside 0-100 if needed
+            # print(f"Warning: Score {score} outside expected 0-100 range.")
+            # pass 
+
+    if normalize:
+        normalized_bins = {key: count / total_count for key, count in bin_counts.items()}
+        return normalized_bins
+    else:
+        return bin_counts
+
+# --- Example Usage ---
+# Assume 'entity_confidences' is the list of Tesseract confidence scores
+# for the words making up a single extracted entity.
+
+entity_confidences_1 = [95, 85, 98, 82, 91, 65, 99, 75] 
+entity_confidences_2 = [99, 97, 98]
+entity_confidences_3 = [55, 60]
+entity_confidences_empty = []
+
+print("--- Example 1 ---")
+stats1 = calculate_summary_stats(entity_confidences_1, low_conf_threshold=80)
+bins1_count = calculate_binned_counts(entity_confidences_1, normalize=False)
+bins1_ratio = calculate_binned_counts(entity_confidences_1, normalize=True)
+print("Confidences:", entity_confidences_1)
+print("Summary Stats:", stats1)
+print("Bin Counts:", bins1_count)
+print("Bin Ratios:", bins1_ratio)
+
+print("\n--- Example 2 ---")
+stats2 = calculate_summary_stats(entity_confidences_2, low_conf_threshold=80)
+bins2_count = calculate_binned_counts(entity_confidences_2, normalize=False)
+print("Confidences:", entity_confidences_2)
+print("Summary Stats:", stats2)
+print("Bin Counts:", bins2_count)
+
+print("\n--- Example 3 ---")
+stats3 = calculate_summary_stats(entity_confidences_3, low_conf_threshold=80)
+bins3_count = calculate_binned_counts(entity_confidences_3, normalize=False)
+print("Confidences:", entity_confidences_3)
+print("Summary Stats:", stats3)
+print("Bin Counts:", bins3_count)
+
+print("\n--- Example Empty ---")
+stats_empty = calculate_summary_stats(entity_confidences_empty, low_conf_threshold=80)
+bins_empty = calculate_binned_counts(entity_confidences_empty, normalize=False)
+print("Confidences:", entity_confidences_empty)
+print("Summary Stats:", stats_empty)
+print("Bin Counts:", bins_empty)
+
+
+Explanation:
+
+calculate_summary_stats(confidences, low_conf_threshold=80):
+
+Takes a list of confidences and an optional low_conf_threshold.
+
+Handles the edge case of an empty input list by returning np.nan for stats and 0 for counts/ratios.
+
+Converts the list to a numpy array for efficient calculations.
+
+Uses numpy functions (mean, median, min, max, std, ptp) to compute the statistics. ptp calculates the range (Peak To Peak).
+
+Calculates the count and ratio of scores below the low_conf_threshold.
+
+Returns a dictionary where keys are descriptive feature names (e.g., conf_mean, conf_low_ratio) and values are the calculated statistics (cast to standard Python floats/ints for compatibility).
+
+calculate_binned_counts(confidences, normalize=False):
+
+Takes the list of confidences and a normalize flag.
+
+Initializes a dictionary bin_counts with keys for each bin range, starting counts at 0.
+
+Handles the empty list case.
+
+Iterates through each score in the confidences list.
+
+Uses if/elif conditions to check which bin the score falls into and increments the corresponding counter. Includes a basic clamping (max(0, min(100, score))) to ensure scores are within the expected 0-100 range for the binning logic.
+
+If normalize is True, it divides each count by the total_count to get ratios.
+
+Returns the dictionary containing either the counts or the ratios for each bin.
+
+You would call these functions for each extracted entity, using the list of Tesseract word confidences associated with that entity as input. The resulting dictionaries can then be flattened or directly used to create columns in your feature matrix for the boosting model.
