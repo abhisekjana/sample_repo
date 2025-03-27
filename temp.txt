@@ -1,71 +1,86 @@
-Okay, let's modify the previous script to use RandomizedSearchCV and add the code to save the best model found.
 
-Changes:
+print("Checking for zero-variance features...")
+variances = X_train.var()
+zero_variance_cols = variances[variances == 0].index.tolist()
+if zero_variance_cols:
+    print(f"Warning: Found zero-variance columns: {zero_variance_cols}")
+    print("Removing zero-variance columns...")
+    X_train = X_train.drop(columns=zero_variance_cols)
+    X_val = X_val.drop(columns=zero_variance_cols) # Keep columns consistent
+    X_test = X_test.drop(columns=zero_variance_cols)
+    print(f"Remaining features: {X_train.shape[1]}")
+else:
+    print("No zero-variance features found.")
 
-Import RandomizedSearchCV from sklearn.model_selection.
 
-Import joblib for saving the model.
+min_split_gain (or min_gain_to_split) is Non-Zero:
 
-Define N_ITER_SEARCH to control how many random combinations are tested.
+Problem: If this parameter is set to a positive value, splits that result in a gain less than this value are ignored. While usually not the sole cause if the best gain is -inf, it can contribute if all potential gains are very small positive numbers or negative.
 
-Rename PARAM_GRID to PARAM_DIST (convention, though lists still work). You could optionally define actual distributions using scipy.stats for continuous parameters if desired, but using lists is simpler for a direct replacement.
+Solution: Ensure this parameter is 0.0 (the default) during your randomized search, or explicitly include 0.0 as an option if you are tuning it.
 
-Replace the GridSearchCV instance with RandomizedSearchCV, passing param_distributions and n_iter.
+Code Change: Ensure 'min_split_gain': [0.0] or similar is implicitly or explicitly part of your search if you tune it. Usually, it's better not to tune this initially unless you suspect tiny gains are causing issues.
 
-Update variable names from grid_search to random_search for clarity.
+High Regularization (reg_alpha, reg_lambda):
 
-Add a section after finding the best model to save it using joblib.
+Problem: Strong L1 or L2 regularization adds a penalty to the gain calculation based on leaf weights/values. Very high regularization can make the calculated gain negative even if the raw error reduction was positive.
+
+Solution: Check if your PARAM_DIST includes very high values for reg_alpha or reg_lambda. Try reducing the upper bounds or focusing on smaller values (e.g., [0.0, 0.1, 0.5, 1.0]).
+
+Code Change: Review the ranges for reg_alpha and reg_lambda in PARAM_DIST.
+
+Specific Data in CV Folds:
+
+Problem: The issue might only occur on a specific fold during cross-validation where the data characteristics (small size, low variance) trigger the problem for certain parameter combinations being tested by RandomizedSearchCV.
+
+Solution: While harder to debug directly, ensuring min_child_samples is flexible usually mitigates this. If the problem persists, you might need to inspect the data within the problematic fold, though often adjusting hyperparameters is sufficient.
+
+Updated Code Snippet:
+
+Let's integrate the most likely fixes (min_child_samples tuning and zero-variance feature removal):
 
 import pandas as pd
 import numpy as np
 import lightgbm as lgb
-# Updated imports
 from sklearn.model_selection import train_test_split, RandomizedSearchCV
 from sklearn.metrics import mean_squared_error, r2_score
-from imblearn.over_sampling import RandomOverSampler # Example resampler
+from imblearn.over_sampling import RandomOverSampler
 import math
-import joblib # For saving the model
+import joblib
 import warnings
-# Optional: Import distributions if you want to sample from ranges
-# import scipy.stats as stats
+# import scipy.stats as stats # Optional
 
-warnings.filterwarnings('ignore', category=FutureWarning) # Suppress some sklearn/imblearn warnings
+warnings.filterwarnings('ignore', category=FutureWarning)
 
 # --- Configuration ---
-CSV_FILE_PATH = 'your_feature_data.csv'  # <<< CHANGE THIS TO YOUR CSV FILE PATH
+CSV_FILE_PATH = 'your_feature_data.csv'
 TARGET_COLUMN = 'gt'
-TEST_SIZE = 0.10  # 10% for test
-VALIDATION_SIZE = 0.10 # 10% for validation (relative to original size)
-# Train size will be 1 - TEST_SIZE - VALIDATION_SIZE = 80%
-
-# Resampling configuration
+TEST_SIZE = 0.10
+VALIDATION_SIZE = 0.10
 USE_RESAMPLING = False
 RESAMPLING_BINS = [0, 0.3, 0.7, 1.0]
 RESAMPLING_STRATEGY = 'auto'
+N_ITER_SEARCH = 50
+RANDOM_STATE = 42
+MODEL_SAVE_PATH = 'best_lgbm_confidence_model.joblib'
 
-# Randomized Search Parameters
-# Define the number of parameter settings that are sampled. n_iter trades off runtime vs quality of the solution.
-N_ITER_SEARCH = 50 # <<< Number of iterations (parameter combinations) for Randomized Search (MUCH faster than GridSearchCV)
-
-# Parameter distributions for RandomizedSearchCV (can use lists or scipy.stats distributions)
+# Parameter distributions for RandomizedSearchCV
 PARAM_DIST = {
-    'n_estimators': [100, 200, 300, 500, 700], # Can use lists or distributions like stats.randint(100, 800)
-    'learning_rate': [0.01, 0.03, 0.05, 0.1, 0.15], # Can use lists or distributions like stats.uniform(0.01, 0.15)
-    'num_leaves': [20, 31, 40, 50, 60, 70], # Can use lists or distributions like stats.randint(20, 80)
-    'colsample_bytree': [0.6, 0.7, 0.8, 0.9, 1.0], # Can use lists or distributions like stats.uniform(0.6, 0.4) -> range 0.6 to 1.0
-    'subsample': [0.6, 0.7, 0.8, 0.9, 1.0], # Can use lists or distributions like stats.uniform(0.6, 0.4)
-    'reg_alpha': [0.0, 0.1, 0.5, 1.0], # Can use lists or distributions like stats.uniform(0.0, 1.0)
-    'reg_lambda': [0.0, 0.1, 0.5, 1.0], # Can use lists or distributions like stats.uniform(0.0, 1.0)
+    'n_estimators': [100, 200, 300, 500, 700],
+    'learning_rate': [0.01, 0.03, 0.05, 0.1, 0.15],
+    'num_leaves': [20, 31, 40, 50, 60, 70],
+    'colsample_bytree': [0.6, 0.7, 0.8, 0.9, 1.0],
+    'subsample': [0.6, 0.7, 0.8, 0.9, 1.0],
+    'reg_alpha': [0.0, 0.1, 0.5, 1.0],
+    'reg_lambda': [0.0, 0.1, 0.5, 1.0],
+    # --- ADDED/MODIFIED ---
+    'min_child_samples': [1, 5, 10, 20], # Test smaller values!
+    'min_split_gain': [0.0] # Ensure it's zero unless specifically tuning
 }
-# Note: Using lists means RandomizedSearchCV samples uniformly from the given options.
-# Using scipy.stats distributions (e.g., stats.uniform(0.01, 0.1)) allows sampling from continuous ranges.
-
-RANDOM_STATE = 42 # For reproducibility
-MODEL_SAVE_PATH = 'best_lgbm_confidence_model.joblib' # <<< Path to save the final model
 
 # --- Helper Function for Resampling Binning ---
+# (Keep the create_bins function as before)
 def create_bins(y, bins):
-    """Creates discrete bins from a continuous target for resampling guidance."""
     binned_y = pd.cut(y, bins=bins, labels=False, include_lowest=True, right=True)
     binned_y = binned_y.fillna(len(bins) - 2)
     return binned_y.astype(int)
@@ -74,38 +89,36 @@ def create_bins(y, bins):
 print("--- Starting Modeling Process ---")
 
 # 1. Load Data
+# (Keep data loading as before)
 try:
     print(f"Loading data from: {CSV_FILE_PATH}")
     df = pd.read_csv(CSV_FILE_PATH)
     print(f"Data loaded successfully. Shape: {df.shape}")
-except FileNotFoundError:
-    print(f"Error: CSV file not found at {CSV_FILE_PATH}. Please check the path.")
+except FileNotFoundError: # ... (rest of error handling)
+    print(f"Error: CSV file not found at {CSV_FILE_PATH}.")
     exit()
 except Exception as e:
     print(f"Error loading CSV: {e}")
     exit()
-
-if TARGET_COLUMN not in df.columns:
-    print(f"Error: Target column '{TARGET_COLUMN}' not found in the CSV.")
+if TARGET_COLUMN not in df.columns: # ... (rest of error handling)
+    print(f"Error: Target column '{TARGET_COLUMN}' not found.")
     exit()
 
+
 # 2. Define Features (X) and Target (y)
+# (Keep X, y separation as before)
 print(f"Separating features and target ('{TARGET_COLUMN}')...")
 X = df.drop(TARGET_COLUMN, axis=1)
 y = df[TARGET_COLUMN]
 print(f"Features shape: {X.shape}, Target shape: {y.shape}")
-
-# Basic check for non-numeric features
 numeric_cols = X.select_dtypes(include=np.number).columns.tolist()
-if len(numeric_cols) != X.shape[1]:
-    print("Warning: Non-numeric columns detected in features. Consider encoding them.")
-    print(f"Non-numeric columns: {X.select_dtypes(exclude=np.number).columns.tolist()}")
-    # Depending on your data, you might encode or drop these columns here
-    # X = X[numeric_cols] # Example: Keep only numeric
-
+if len(numeric_cols) != X.shape[1]: # ... (non-numeric warning)
+    print("Warning: Non-numeric columns detected...")
+    # X = X[numeric_cols] # Optional: handle non-numeric
 
 # 3. Split Data (Train/Validation/Test)
-print(f"Splitting data: {(1-TEST_SIZE-VALIDATION_SIZE)*100:.0f}% Train, {VALIDATION_SIZE*100:.0f}% Validation, {TEST_SIZE*100:.0f}% Test")
+# (Keep data splitting as before)
+print(f"Splitting data...")
 X_train_val, X_test, y_train_val, y_test = train_test_split(
     X, y, test_size=TEST_SIZE, random_state=RANDOM_STATE
 )
@@ -116,101 +129,106 @@ X_train, X_val, y_train, y_val = train_test_split(
 print(f"Train set size: {X_train.shape[0]}")
 print(f"Validation set size: {X_val.shape[0]}")
 print(f"Test set size: {X_test.shape[0]}")
+print(f"Training target variance: {y_train.var():.4f}") # Check target variance
+
+# --- ADDED: Zero Variance Feature Check ---
+print("\nChecking for zero-variance features...")
+variances = X_train.var()
+zero_variance_cols = variances[variances == 0].index.tolist()
+if zero_variance_cols:
+    print(f"Warning: Found zero-variance columns: {zero_variance_cols}")
+    print("Removing zero-variance columns...")
+    # Ensure columns exist before dropping (in case split resulted in empty sets)
+    cols_to_drop_train = [col for col in zero_variance_cols if col in X_train.columns]
+    cols_to_drop_val = [col for col in zero_variance_cols if col in X_val.columns]
+    cols_to_drop_test = [col for col in zero_variance_cols if col in X_test.columns]
+
+    if cols_to_drop_train: X_train = X_train.drop(columns=cols_to_drop_train)
+    if cols_to_drop_val: X_val = X_val.drop(columns=cols_to_drop_val)
+    if cols_to_drop_test: X_test = X_test.drop(columns=cols_to_drop_test)
+    print(f"Remaining features in train set: {X_train.shape[1]}")
+else:
+    print("No zero-variance features found.")
+# --- END ADDED SECTION ---
+
 
 # 4. Resampling (Optional)
-if USE_RESAMPLING:
-    print("\n--- Applying Resampling (RandomOverSampler based on binned target) ---")
-    print(f"Binning target for resampling using bins: {RESAMPLING_BINS}")
-    try:
-        y_train_binned = create_bins(y_train, RESAMPLING_BINS)
-        print("Original training distribution (based on bins):")
-        print(y_train_binned.value_counts(normalize=True).sort_index())
-        resampler = RandomOverSampler(sampling_strategy=RESAMPLING_STRATEGY, random_state=RANDOM_STATE)
-        resampled_indices = resampler.fit_resample(X_train, y_train_binned)[1].index # Get indices correctly
-        X_train = X_train.loc[resampled_indices]
-        y_train = y_train.loc[resampled_indices]
-        print(f"Resampled training data shape: {X_train.shape}")
-        print("Resampled training distribution (based on bins):")
-        print(create_bins(y_train, RESAMPLING_BINS).value_counts(normalize=True).sort_index()) # Re-bin for verification
-        print("Training data has been replaced with resampled data.")
-    except Exception as e:
-        print(f"Error during resampling: {e}")
-        print("Proceeding without resampling.")
-        USE_RESAMPLING = False
+# (Keep resampling block as before)
+if USE_RESAMPLING: # ... (resampling logic)
+    print("\n--- Applying Resampling ---")
+    # ... (rest of resampling code)
 else:
     print("\nSkipping resampling.")
 
 
-# 5. Define Model and Randomized Search <<< UPDATED SECTION
+# 5. Define Model and Randomized Search
+# (Keep model definition and RandomizedSearchCV setup as before, using updated PARAM_DIST)
 print("\n--- Setting up RandomizedSearchCV for LightGBM ---")
 lgbm = lgb.LGBMRegressor(random_state=RANDOM_STATE)
-
-# Use RandomizedSearchCV instead of GridSearchCV
 random_search = RandomizedSearchCV(
     estimator=lgbm,
-    param_distributions=PARAM_DIST, # Use param_distributions
-    n_iter=N_ITER_SEARCH,         # Number of parameter settings that are sampled
+    param_distributions=PARAM_DIST, # Using updated PARAM_DIST
+    n_iter=N_ITER_SEARCH,
     scoring='neg_mean_squared_error',
     cv=5,
     n_jobs=-1,
     verbose=1,
-    random_state=RANDOM_STATE       # Set random state for Randomized Search reproducibility
+    random_state=RANDOM_STATE
 )
 
-# 6. Perform Randomized Search <<< UPDATED SECTION
-print(f"Starting Randomized Search ({N_ITER_SEARCH} iterations)...")
-# Fit RandomizedSearch on the (potentially resampled) training data
-random_search.fit(X_train, y_train,
-                  eval_set=[(X_val, y_val)], # Use validation set for early stopping
-                  eval_metric='rmse',
-                  callbacks=[lgb.early_stopping(10, verbose=False)] # Early stopping
-                 )
+# 6. Perform Randomized Search
+# (Keep fitting block as before)
+print(f"\nStarting Randomized Search ({N_ITER_SEARCH} iterations)...")
+try:
+    random_search.fit(X_train, y_train,
+                      eval_set=[(X_val, y_val)],
+                      eval_metric='rmse',
+                      callbacks=[lgb.early_stopping(10, verbose=False)]
+                     )
+    print("Randomized Search finished.")
 
-print("Randomized Search finished.")
+except Exception as e:
+     print(f"\nError during Randomized Search fitting: {e}")
+     print("Check data and parameters. Common causes include low data variance or overly restrictive parameters like min_child_samples.")
+     # Optionally exit or try default parameters
+     exit()
 
-# 7. Get Best Model and Parameters <<< UPDATED SECTION
+
+# 7. Get Best Model and Parameters
+# (Keep results extraction as before)
 print("\n--- Randomized Search Results ---")
 print(f"Best Parameters found: {random_search.best_params_}")
-# Best score is negative MSE, convert to positive RMSE
 best_cv_rmse = math.sqrt(-random_search.best_score_)
 print(f"Best Cross-Validation RMSE: {best_cv_rmse:.4f}")
-
-# The best model is automatically refit on the entire training data (X_train, y_train)
 best_model = random_search.best_estimator_
 
 # 8. Evaluate on Test Set
+# (Keep evaluation as before)
 print("\n--- Evaluating Best Model on Test Set ---")
 y_pred_test = best_model.predict(X_test)
-
-# Calculate metrics
 test_rmse = math.sqrt(mean_squared_error(y_test, y_pred_test))
 test_r2 = r2_score(y_test, y_pred_test)
-
 print(f"Test Set RMSE: {test_rmse:.4f}")
 print(f"Test Set R-squared (R2): {test_r2:.4f}")
 
-# 9. Save the Best Model <<< NEW SECTION
+# 9. Save the Best Model
+# (Keep saving block as before)
 print(f"\n--- Saving the best model to {MODEL_SAVE_PATH} ---")
 try:
     joblib.dump(best_model, MODEL_SAVE_PATH)
-    print(f"Model saved successfully to {MODEL_SAVE_PATH}")
-except Exception as e:
-    print(f"Error saving model: {e}")
+    print(f"Model saved successfully.")
+except Exception as e: # ... (error handling)
+     print(f"Error saving model: {e}")
+
 
 # --- Optional: Feature Importance ---
+# (Keep feature importance block as before, ensure using correct feature names)
 try:
     print("\n--- Feature Importances (Top 15) ---")
-    # Make sure features used for training are available if X was modified earlier
-    feature_names = X_train.columns # Use columns from training data used by the model
+    feature_names = X_train.columns # Get feature names from the final training set
     feature_importances = pd.Series(best_model.feature_importances_, index=feature_names)
     print(feature_importances.nlargest(15).to_string())
 except Exception as e:
     print(f"Could not retrieve/display feature importances: {e}")
 
-
 print("\n--- Modeling Process Complete ---")
-
-# --- How to load the model later ---
-# loaded_model = joblib.load(MODEL_SAVE_PATH)
-# predictions = loaded_model.predict(new_X_data)
-# print("Model loaded and ready for prediction.")
