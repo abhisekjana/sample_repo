@@ -1,15 +1,33 @@
-pip install pandas scikit-learn lightgbm imbalanced-learn
+Okay, let's modify the previous script to use RandomizedSearchCV and add the code to save the best model found.
 
-Code:
+Changes:
+
+Import RandomizedSearchCV from sklearn.model_selection.
+
+Import joblib for saving the model.
+
+Define N_ITER_SEARCH to control how many random combinations are tested.
+
+Rename PARAM_GRID to PARAM_DIST (convention, though lists still work). You could optionally define actual distributions using scipy.stats for continuous parameters if desired, but using lists is simpler for a direct replacement.
+
+Replace the GridSearchCV instance with RandomizedSearchCV, passing param_distributions and n_iter.
+
+Update variable names from grid_search to random_search for clarity.
+
+Add a section after finding the best model to save it using joblib.
 
 import pandas as pd
 import numpy as np
 import lightgbm as lgb
-from sklearn.model_selection import train_test_split, GridSearchCV
+# Updated imports
+from sklearn.model_selection import train_test_split, RandomizedSearchCV
 from sklearn.metrics import mean_squared_error, r2_score
 from imblearn.over_sampling import RandomOverSampler # Example resampler
 import math
+import joblib # For saving the model
 import warnings
+# Optional: Import distributions if you want to sample from ranges
+# import scipy.stats as stats
 
 warnings.filterwarnings('ignore', category=FutureWarning) # Suppress some sklearn/imblearn warnings
 
@@ -18,34 +36,38 @@ CSV_FILE_PATH = 'your_feature_data.csv'  # <<< CHANGE THIS TO YOUR CSV FILE PATH
 TARGET_COLUMN = 'gt'
 TEST_SIZE = 0.10  # 10% for test
 VALIDATION_SIZE = 0.10 # 10% for validation (relative to original size)
-# Note: Train size will be 1 - TEST_SIZE - VALIDATION_SIZE = 80%
+# Train size will be 1 - TEST_SIZE - VALIDATION_SIZE = 80%
 
-# Resampling configuration (Use with caution for regression)
-USE_RESAMPLING = False  # <<< SET TO True TO ENABLE RESAMPLING (read notes below)
-RESAMPLING_BINS = [0, 0.3, 0.7, 1.0] # Define bins for target to guide resampling
-RESAMPLING_STRATEGY = 'auto' # or specify sampling ratios dictionary
+# Resampling configuration
+USE_RESAMPLING = False
+RESAMPLING_BINS = [0, 0.3, 0.7, 1.0]
+RESAMPLING_STRATEGY = 'auto'
 
-# Grid Search Parameters for LGBMRegressor
-PARAM_GRID = {
-    'n_estimators': [100, 200, 500],
-    'learning_rate': [0.01, 0.05, 0.1],
-    'num_leaves': [31, 50, 70],
-    # 'max_depth': [-1, 10, 20], # Often num_leaves is preferred over max_depth
-    'colsample_bytree': [0.7, 0.9, 1.0],
-    'subsample': [0.7, 0.9, 1.0],
-    'reg_alpha': [0.0, 0.1, 0.5], # L1 regularization
-    'reg_lambda': [0.0, 0.1, 0.5], # L2 regularization
+# Randomized Search Parameters
+# Define the number of parameter settings that are sampled. n_iter trades off runtime vs quality of the solution.
+N_ITER_SEARCH = 50 # <<< Number of iterations (parameter combinations) for Randomized Search (MUCH faster than GridSearchCV)
+
+# Parameter distributions for RandomizedSearchCV (can use lists or scipy.stats distributions)
+PARAM_DIST = {
+    'n_estimators': [100, 200, 300, 500, 700], # Can use lists or distributions like stats.randint(100, 800)
+    'learning_rate': [0.01, 0.03, 0.05, 0.1, 0.15], # Can use lists or distributions like stats.uniform(0.01, 0.15)
+    'num_leaves': [20, 31, 40, 50, 60, 70], # Can use lists or distributions like stats.randint(20, 80)
+    'colsample_bytree': [0.6, 0.7, 0.8, 0.9, 1.0], # Can use lists or distributions like stats.uniform(0.6, 0.4) -> range 0.6 to 1.0
+    'subsample': [0.6, 0.7, 0.8, 0.9, 1.0], # Can use lists or distributions like stats.uniform(0.6, 0.4)
+    'reg_alpha': [0.0, 0.1, 0.5, 1.0], # Can use lists or distributions like stats.uniform(0.0, 1.0)
+    'reg_lambda': [0.0, 0.1, 0.5, 1.0], # Can use lists or distributions like stats.uniform(0.0, 1.0)
 }
+# Note: Using lists means RandomizedSearchCV samples uniformly from the given options.
+# Using scipy.stats distributions (e.g., stats.uniform(0.01, 0.1)) allows sampling from continuous ranges.
 
 RANDOM_STATE = 42 # For reproducibility
+MODEL_SAVE_PATH = 'best_lgbm_confidence_model.joblib' # <<< Path to save the final model
 
 # --- Helper Function for Resampling Binning ---
 def create_bins(y, bins):
     """Creates discrete bins from a continuous target for resampling guidance."""
-    # Ensure bins cover the full range, adding epsilon for inclusion
     binned_y = pd.cut(y, bins=bins, labels=False, include_lowest=True, right=True)
-    # Handle potential NaN if y values fall exactly on bin edges in some pandas versions
-    binned_y = binned_y.fillna(len(bins) - 2) # Assign to the last valid label index
+    binned_y = binned_y.fillna(len(bins) - 2)
     return binned_y.astype(int)
 
 # --- Main Script ---
@@ -73,115 +95,88 @@ X = df.drop(TARGET_COLUMN, axis=1)
 y = df[TARGET_COLUMN]
 print(f"Features shape: {X.shape}, Target shape: {y.shape}")
 
-# Check if features are all numeric (LightGBM prefers this)
+# Basic check for non-numeric features
 numeric_cols = X.select_dtypes(include=np.number).columns.tolist()
 if len(numeric_cols) != X.shape[1]:
     print("Warning: Non-numeric columns detected in features. Consider encoding them.")
     print(f"Non-numeric columns: {X.select_dtypes(exclude=np.number).columns.tolist()}")
-    # Basic handling: Drop non-numeric for this example
-    # A better approach would be OneHotEncoding or similar
-    # X = X[numeric_cols]
-    # print(f"Keeping only numeric columns. New features shape: {X.shape}")
-    # OR: exit() if non-numeric must be handled properly first
+    # Depending on your data, you might encode or drop these columns here
+    # X = X[numeric_cols] # Example: Keep only numeric
 
 
 # 3. Split Data (Train/Validation/Test)
 print(f"Splitting data: {(1-TEST_SIZE-VALIDATION_SIZE)*100:.0f}% Train, {VALIDATION_SIZE*100:.0f}% Validation, {TEST_SIZE*100:.0f}% Test")
-# First split: Separate test set
 X_train_val, X_test, y_train_val, y_test = train_test_split(
     X, y, test_size=TEST_SIZE, random_state=RANDOM_STATE
 )
-
-# Calculate validation size relative to the remaining data
 val_size_relative = VALIDATION_SIZE / (1 - TEST_SIZE)
-
-# Second split: Separate validation set from the rest
 X_train, X_val, y_train, y_val = train_test_split(
     X_train_val, y_train_val, test_size=val_size_relative, random_state=RANDOM_STATE
 )
-
 print(f"Train set size: {X_train.shape[0]}")
 print(f"Validation set size: {X_val.shape[0]}")
 print(f"Test set size: {X_test.shape[0]}")
 
-# 4. Resampling (Optional - Applied *before* Grid Search in this simple example)
-# NOTE: Resampling for regression is non-standard. This approach bins the target
-#       to apply a classification resampler. This might distort the original
-#       distribution. Applying it *before* GridSearch/CV means the validation
-#       folds within GridSearch see data influenced by resampling, which isn't ideal.
-#       A more correct (but complex) approach uses imblearn pipelines within CV.
-#       Consider if resampling is truly needed or if model weighting/robust loss
-#       functions are better alternatives for skewed regression targets.
+# 4. Resampling (Optional)
 if USE_RESAMPLING:
     print("\n--- Applying Resampling (RandomOverSampler based on binned target) ---")
     print(f"Binning target for resampling using bins: {RESAMPLING_BINS}")
-
     try:
-        # Create bins ONLY for the resampler's guidance
         y_train_binned = create_bins(y_train, RESAMPLING_BINS)
-
         print("Original training distribution (based on bins):")
         print(y_train_binned.value_counts(normalize=True).sort_index())
-
         resampler = RandomOverSampler(sampling_strategy=RESAMPLING_STRATEGY, random_state=RANDOM_STATE)
-        X_train_resampled, y_train_binned_resampled = resampler.fit_resample(X_train, y_train_binned)
-
-        # Crucially, we need the original y values corresponding to the resampled indices
-        # Get the indices used by the resampler
-        resampled_indices = resampler.sample_indices_
-        y_train_resampled = y_train.iloc[resampled_indices] # Get original y values for resampled data
-
-        print(f"Resampled training data shape: {X_train_resampled.shape}")
+        resampled_indices = resampler.fit_resample(X_train, y_train_binned)[1].index # Get indices correctly
+        X_train = X_train.loc[resampled_indices]
+        y_train = y_train.loc[resampled_indices]
+        print(f"Resampled training data shape: {X_train.shape}")
         print("Resampled training distribution (based on bins):")
-        print(y_train_binned_resampled.value_counts(normalize=True).sort_index())
-
-        # Overwrite train variables
-        X_train = X_train_resampled
-        y_train = y_train_resampled
+        print(create_bins(y_train, RESAMPLING_BINS).value_counts(normalize=True).sort_index()) # Re-bin for verification
         print("Training data has been replaced with resampled data.")
-
     except Exception as e:
         print(f"Error during resampling: {e}")
         print("Proceeding without resampling.")
-        USE_RESAMPLING = False # Disable if error occurs
+        USE_RESAMPLING = False
 else:
     print("\nSkipping resampling.")
 
 
-# 5. Define Model and Grid Search
-print("\n--- Setting up GridSearchCV for LightGBM ---")
+# 5. Define Model and Randomized Search <<< UPDATED SECTION
+print("\n--- Setting up RandomizedSearchCV for LightGBM ---")
 lgbm = lgb.LGBMRegressor(random_state=RANDOM_STATE)
 
-# Use negative MSE because GridSearchCV maximizes score
-grid_search = GridSearchCV(
+# Use RandomizedSearchCV instead of GridSearchCV
+random_search = RandomizedSearchCV(
     estimator=lgbm,
-    param_grid=PARAM_GRID,
-    scoring='neg_mean_squared_error', # Maximize negative MSE (equivalent to minimizing MSE)
-    cv=5,           # 5-fold cross-validation
-    n_jobs=-1,      # Use all available CPU cores
-    verbose=1       # Show progress
+    param_distributions=PARAM_DIST, # Use param_distributions
+    n_iter=N_ITER_SEARCH,         # Number of parameter settings that are sampled
+    scoring='neg_mean_squared_error',
+    cv=5,
+    n_jobs=-1,
+    verbose=1,
+    random_state=RANDOM_STATE       # Set random state for Randomized Search reproducibility
 )
 
-# 6. Perform Grid Search
-print("Starting Grid Search (this may take a while)...")
-# Fit GridSearch on the (potentially resampled) training data
-grid_search.fit(X_train, y_train,
-                eval_set=[(X_val, y_val)], # Use validation set for early stopping if params allow
-                eval_metric='rmse',       # Evaluation metric for early stopping
-                callbacks=[lgb.early_stopping(10, verbose=False)] # Stop if val RMSE doesn't improve for 10 rounds
-               )
+# 6. Perform Randomized Search <<< UPDATED SECTION
+print(f"Starting Randomized Search ({N_ITER_SEARCH} iterations)...")
+# Fit RandomizedSearch on the (potentially resampled) training data
+random_search.fit(X_train, y_train,
+                  eval_set=[(X_val, y_val)], # Use validation set for early stopping
+                  eval_metric='rmse',
+                  callbacks=[lgb.early_stopping(10, verbose=False)] # Early stopping
+                 )
 
-print("Grid Search finished.")
+print("Randomized Search finished.")
 
-# 7. Get Best Model and Parameters
-print("\n--- Grid Search Results ---")
-print(f"Best Parameters found: {grid_search.best_params_}")
+# 7. Get Best Model and Parameters <<< UPDATED SECTION
+print("\n--- Randomized Search Results ---")
+print(f"Best Parameters found: {random_search.best_params_}")
 # Best score is negative MSE, convert to positive RMSE
-best_cv_rmse = math.sqrt(-grid_search.best_score_)
+best_cv_rmse = math.sqrt(-random_search.best_score_)
 print(f"Best Cross-Validation RMSE: {best_cv_rmse:.4f}")
 
 # The best model is automatically refit on the entire training data (X_train, y_train)
-best_model = grid_search.best_estimator_
+best_model = random_search.best_estimator_
 
 # 8. Evaluate on Test Set
 print("\n--- Evaluating Best Model on Test Set ---")
@@ -194,13 +189,28 @@ test_r2 = r2_score(y_test, y_pred_test)
 print(f"Test Set RMSE: {test_rmse:.4f}")
 print(f"Test Set R-squared (R2): {test_r2:.4f}")
 
+# 9. Save the Best Model <<< NEW SECTION
+print(f"\n--- Saving the best model to {MODEL_SAVE_PATH} ---")
+try:
+    joblib.dump(best_model, MODEL_SAVE_PATH)
+    print(f"Model saved successfully to {MODEL_SAVE_PATH}")
+except Exception as e:
+    print(f"Error saving model: {e}")
+
 # --- Optional: Feature Importance ---
 try:
     print("\n--- Feature Importances (Top 15) ---")
-    feature_importances = pd.Series(best_model.feature_importances_, index=X.columns)
+    # Make sure features used for training are available if X was modified earlier
+    feature_names = X_train.columns # Use columns from training data used by the model
+    feature_importances = pd.Series(best_model.feature_importances_, index=feature_names)
     print(feature_importances.nlargest(15).to_string())
 except Exception as e:
-    print(f"Could not retrieve feature importances: {e}")
+    print(f"Could not retrieve/display feature importances: {e}")
 
 
 print("\n--- Modeling Process Complete ---")
+
+# --- How to load the model later ---
+# loaded_model = joblib.load(MODEL_SAVE_PATH)
+# predictions = loaded_model.predict(new_X_data)
+# print("Model loaded and ready for prediction.")
