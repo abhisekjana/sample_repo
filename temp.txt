@@ -1,158 +1,174 @@
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import (
-    precision_recall_curve, roc_curve, auc,
-    f1_score, precision_score, recall_score, accuracy_score,
-    confusion_matrix, classification_report, matthews_corrcoef
+from sklearn.model_selection import train_test_split, StratifiedKFold, RandomizedSearchCV
+from sklearn.metrics import make_scorer, average_precision_score, f1_score, roc_auc_score
+from scipy.stats import randint as sp_randint
+from scipy.stats import uniform as sp_uniform
+
+# --- 1. Load or Prepare Your Data ---
+# Assume you have X, y where y is highly imbalanced
+# For demonstration, let's create dummy data
+from sklearn.datasets import make_classification
+X, y = make_classification(n_samples=10000, n_features=20, n_informative=5,
+                           n_redundant=5, n_classes=2, weights=[0.98, 0.02], # Highly imbalanced
+                           flip_y=0.05, random_state=42)
+X = pd.DataFrame(X, columns=[f'feature_{i}' for i in range(X.shape[1])])
+y = pd.Series(y)
+
+# --- 2. Split Data (Stratified) ---
+# Crucial to use stratify for imbalanced datasets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42, stratify=y)
+
+print(f"Training set shape: {X_train.shape}")
+print(f"Test set shape: {X_test.shape}")
+print(f"Training set positive class proportion: {y_train.mean():.4f}")
+print(f"Test set positive class proportion: {y_test.mean():.4f}")
+
+
+# --- 3. Define Base Model and Calculate scale_pos_weight ---
+# Calculate scale_pos_weight on the *training* data
+neg_count = np.sum(y_train == 0)
+pos_count = np.sum(y_train == 1)
+scale_pos_weight_value = neg_count / pos_count
+print(f"\nCalculated scale_pos_weight for training data: {scale_pos_weight_value:.2f}")
+
+# Base LGBM Classifier instance
+# We will set scale_pos_weight here, as it's usually determined by data imbalance ratio
+# rather than tuned randomly in the same way as other hyperparameters.
+# You *could* include it in the search space if you suspect the calculated value isn't optimal.
+base_model = lgb.LGBMClassifier(
+    objective='binary',
+    boosting_type='gbdt',
+    random_state=42,
+    n_jobs=-1,
+    scale_pos_weight=scale_pos_weight_value # Apply the calculated weight
 )
+
+# --- 4. Define Hyperparameter Search Space (Distributions) ---
+# Use distributions from scipy.stats for random search
+param_distributions = {
+    'n_estimators': sp_randint(100, 1500),  # Number of boosting rounds
+    'learning_rate': sp_uniform(0.01, 0.2), # Learning rate (low value means more estimators often needed)
+    'num_leaves': sp_randint(20, 100),      # Max number of leaves in one tree (key tuning parameter)
+    'max_depth': [-1] + list(sp_randint(3, 15).rvs(10)), # Max tree depth, -1 means no limit. Sample some specific depths.
+    'reg_alpha': sp_uniform(0, 1),         # L1 regularization
+    'reg_lambda': sp_uniform(0, 1),        # L2 regularization
+    'colsample_bytree': sp_uniform(0.6, 0.4), # Subsample ratio of columns for each tree (0.6 to 1.0)
+    'subsample': sp_uniform(0.6, 0.4),      # Subsample ratio of the training instance (0.6 to 1.0) - requires boosting_type='gbdt'
+    'min_child_samples': sp_randint(5, 50) # Minimum number of data needed in a child (leaf)
+    # 'scale_pos_weight': sp_uniform(scale_pos_weight_value * 0.5, scale_pos_weight_value * 1.0) # Optionally tune this too
+}
+
+# --- 5. Define Cross-Validation Strategy ---
+# StratifiedKFold is essential for imbalanced datasets
+cv_strategy = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+
+# --- 6. Choose Scoring Metric for Optimization ---
+# For imbalanced data, AUC-PR ('average_precision') or F1-score are better than accuracy or ROC AUC.
+# Let's optimize for AUC-PR. You can also use 'f1' or 'f1_macro'/'f1_weighted'.
+# If using 'f1', ensure your positive class is labeled as 1 or specify pos_label.
+scoring_metric = 'average_precision' # Area Under the Precision-Recall Curve
+
+# You can also evaluate multiple metrics during the search
+# scoring = {
+#     'AUC_PR': 'average_precision',
+#     'F1': 'f1',
+#     'ROC_AUC': 'roc_auc'
+# }
+# refit_metric = 'AUC_PR' # Choose which metric determines the 'best' model
+
+# --- 7. Configure Randomized Search ---
+n_iter_search = 100 # Number of parameter settings that are sampled. Adjust based on time/resources.
+
+random_search = RandomizedSearchCV(
+    estimator=base_model,
+    param_distributions=param_distributions,
+    n_iter=n_iter_search,
+    scoring=scoring_metric, # Or the 'scoring' dictionary
+    # refit=refit_metric, # Use if scoring is a dictionary
+    cv=cv_strategy,
+    random_state=42,
+    n_jobs=-1,  # Use all available cores
+    verbose=2   # Set verbosity level (1 or 2 for progress)
+)
+
+# --- 8. Run the Search ---
+print(f"\nStarting Randomized Search (Optimizing for: {scoring_metric})...")
+
+# Optional: Add early stopping *within* the Randomized Search CV fits
+# This can significantly speed up the search by stopping training early for bad hyperparameter sets
+# Note: This requires a compatible version of scikit-learn (>= 0.24) and LightGBM
+fit_params = {
+    "callbacks": [lgb.early_stopping(stopping_rounds=50, verbose=False)]#,
+    # "eval_metric": "aucpr" # Use AUC-PR for early stopping metric - requires LightGBM >= 3.0
+    # "eval_set": [(X_test, y_test)] # Ideally use a validation set *within* each CV fold, not the final test set!
+                                      # RandomizedSearchCV handles the CV splitting internally.
+                                      # Providing eval_set here might overfit to X_test during search.
+                                      # It's generally better to rely on CV score unless you have a separate validation set
+                                      # *per fold* which is complex to set up here.
+                                      # If not using eval_set, early stopping uses the last metric in `metric` param of LGBMClassifier.
+                                      # Since we set `objective='binary'`, default metrics include `binary_logloss`.
+                                      # Let's rely on the CV score optimization for simplicity here.
+}
+
+
+# random_search.fit(X_train, y_train, **fit_params) # Use this line if you want early stopping
+random_search.fit(X_train, y_train) # Use this line without the early stopping callback
+
+
+# --- 9. Get Best Results ---
+print("\n--- Randomized Search Results ---")
+print(f"Best Score ({scoring_metric}): {random_search.best_score_:.4f}")
+print("Best Parameters:")
+# Sort parameters for readability
+best_params_sorted = {k: random_search.best_params_[k] for k in sorted(random_search.best_params_)}
+for param, value in best_params_sorted.items():
+    print(f"  {param}: {value}")
+
+# Get the best estimator refitted on the whole training data
+best_lgbm_model = random_search.best_estimator_
+
+# --- 10. Evaluate Best Model on Test Set (using optimal threshold finding) ---
+print("\n--- Evaluating Best Model found by Search on Test Set ---")
+
+# Get probabilities from the best model
+y_pred_proba_best = best_lgbm_model.predict_proba(X_test)[:, 1]
+
+# **IMPORTANT:** Now apply the threshold finding logic from the previous response
+# using `y_test` (as y_true) and `y_pred_proba_best`.
+# (Code for threshold finding, plotting curves, calculating final metrics goes here)
+# Example (finding threshold for max F1):
+from sklearn.metrics import precision_recall_curve, f1_score, classification_report, confusion_matrix
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-
-# Use precision_recall_curve to get thresholds and corresponding precision/recall
-precision, recall, thresholds_pr = precision_recall_curve(y_true, y_pred_proba)
-
-# Calculate F1 score for each threshold (adding a small epsilon to avoid division by zero)
-f1_scores = (2 * precision * recall) / (precision + recall + 1e-9)
-
-# Exclude the last precision/recall pair as it corresponds to threshold 1.0 (recall=0)
+precision, recall, thresholds_pr = precision_recall_curve(y_test, y_pred_proba_best)
+f1_scores = (2 * precision * recall) / (precision + recall + 1e-9) # Add epsilon
 f1_scores = f1_scores[:-1]
-thresholds_pr = thresholds_pr[:len(f1_scores)] # Adjust thresholds array length
+thresholds_pr = thresholds_pr[:len(f1_scores)]
 
-# Find the threshold that gives the maximum F1 score
 optimal_idx_f1 = np.argmax(f1_scores)
 optimal_threshold_f1 = thresholds_pr[optimal_idx_f1]
 optimal_f1 = f1_scores[optimal_idx_f1]
 
-print(f"Optimal Threshold (Max F1): {optimal_threshold_f1:.4f}")
-print(f"Maximum F1 Score: {optimal_f1:.4f}")
+print(f"\nOptimal Threshold (Max F1 on Test Set): {optimal_threshold_f1:.4f}")
+print(f"Maximum F1 Score on Test Set: {optimal_f1:.4f}")
 
-# Alternative: Maximize G-Mean using ROC curve data
-fpr, tpr, thresholds_roc = roc_curve(y_true, y_pred_proba)
-tnr = 1 - fpr # Specificity
-gmean = np.sqrt(tpr * tnr)
+# Apply threshold and get final metrics
+y_pred_optimal = (y_pred_proba_best >= optimal_threshold_f1).astype(int)
 
-# Find threshold maximizing G-Mean (adjust index as thresholds_roc has different length)
-optimal_idx_gmean = np.argmax(gmean)
-optimal_threshold_gmean = thresholds_roc[optimal_idx_gmean]
-optimal_gmean = gmean[optimal_idx_gmean]
-
-print(f"Optimal Threshold (Max G-Mean): {optimal_threshold_gmean:.4f}")
-print(f"Maximum G-Mean: {optimal_gmean:.4f}")
-
-# --- Choose your optimal threshold based on your goal ---
-# Let's proceed using the F1-optimized threshold for demonstration
-optimal_threshold = optimal_threshold_f1
-
-
-
-# Apply the chosen optimal threshold
-y_pred_optimal = (y_pred_proba >= optimal_threshold).astype(int)
-
-# Calculate metrics at this threshold
-print("\n--- Metrics at Optimal Threshold ({:.4f}) ---".format(optimal_threshold))
-
-cm = confusion_matrix(y_true, y_pred_optimal)
-print("Confusion Matrix:")
-print(cm)
-
-# Visualize Confusion Matrix
-plt.figure(figsize=(6, 4))
-sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=['Predicted Neg', 'Predicted Pos'], yticklabels=['Actual Neg', 'Actual Pos'])
-plt.title(f'Confusion Matrix (Threshold = {optimal_threshold:.2f})')
-plt.ylabel('Actual Class')
-plt.xlabel('Predicted Class')
+print("\nConfusion Matrix (Test Set @ Optimal Threshold):")
+cm = confusion_matrix(y_test, y_pred_optimal)
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+plt.title(f'Confusion Matrix (Threshold = {optimal_threshold_f1:.2f})')
+plt.ylabel('Actual')
+plt.xlabel('Predicted')
 plt.show()
 
 
-print("\nClassification Report:")
-print(classification_report(y_true, y_pred_optimal, target_names=['Negative (0)', 'Positive (1)']))
+print("\nClassification Report (Test Set @ Optimal Threshold):")
+print(classification_report(y_test, y_pred_optimal, target_names=['Negative (0)', 'Positive (1)']))
 
-# Calculate individual metrics explicitly if needed
-accuracy = accuracy_score(y_true, y_pred_optimal)
-precision_opt = precision_score(y_true, y_pred_optimal)
-recall_opt = recall_score(y_true, y_pred_optimal)
-f1_opt = f1_score(y_true, y_pred_optimal)
-mcc_opt = matthews_corrcoef(y_true, y_pred_optimal)
-tn, fp, fn, tp = cm.ravel()
-specificity_opt = tn / (tn + fp)
-gmean_opt = np.sqrt(recall_opt * specificity_opt)
-
-
-print(f"Accuracy: {accuracy:.4f}")
-print(f"Precision: {precision_opt:.4f}")
-print(f"Recall (Sensitivity): {recall_opt:.4f}")
-print(f"F1 Score: {f1_opt:.4f}")
-print(f"Specificity: {specificity_opt:.4f}")
-print(f"G-Mean: {gmean_opt:.4f}")
-print(f"MCC: {mcc_opt:.4f}")
-
-
-
-# --- ROC Curve ---
-fpr, tpr, thresholds_roc = roc_curve(y_true, y_pred_proba)
-roc_auc = auc(fpr, tpr)
-
-plt.figure(figsize=(8, 6))
-plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (AUC = {roc_auc:.2f})')
-plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--', label='Chance')
-
-# Find the closest threshold on the ROC curve to our chosen optimal_threshold
-idx_roc_optimal = np.argmin(np.abs(thresholds_roc - optimal_threshold))
-plt.plot(fpr[idx_roc_optimal], tpr[idx_roc_optimal], 'ro', markersize=8, label=f'Optimal Threshold ≈ {optimal_threshold:.2f}')
-
-plt.xlim([0.0, 1.0])
-plt.ylim([0.0, 1.05])
-plt.xlabel('False Positive Rate (FPR)')
-plt.ylabel('True Positive Rate (TPR)')
-plt.title('Receiver Operating Characteristic (ROC) Curve')
-plt.legend(loc="lower right")
-plt.grid(alpha=0.3)
-plt.show()
-print(f"AUC-ROC: {roc_auc:.4f}")
-
-
-# --- Precision-Recall Curve ---
-precision, recall, thresholds_pr = precision_recall_curve(y_true, y_pred_proba)
-pr_auc = auc(recall, precision) # Note order: recall is x, precision is y for auc calc
-
-# Baseline = prevalence of positive class
-baseline = pos_count / (pos_count + neg_count)
-
-plt.figure(figsize=(8, 6))
-plt.plot(recall, precision, color='blue', lw=2, label=f'PR curve (AUC = {pr_auc:.2f})')
-plt.plot([0, 1], [baseline, baseline], color='red', lw=2, linestyle='--', label=f'Baseline ({baseline:.2f})')
-
-# Find the closest threshold on the PR curve to our chosen optimal_threshold
-# Need to handle threshold array length carefully
-valid_threshold_indices = np.where(thresholds_pr >= optimal_threshold)[0]
-if len(valid_threshold_indices) > 0:
-    idx_pr_optimal = valid_threshold_indices[0]
-    # Ensure index is within bounds for precision/recall (which are 1 longer than thresholds_pr)
-    if idx_pr_optimal < len(recall) and idx_pr_optimal < len(precision):
-         plt.plot(recall[idx_pr_optimal], precision[idx_pr_optimal], 'go', markersize=8, label=f'Optimal Threshold ≈ {optimal_threshold:.2f}')
-
-plt.xlabel('Recall')
-plt.ylabel('Precision')
-plt.title('Precision-Recall Curve')
-plt.ylim([0.0, 1.05])
-plt.xlim([0.0, 1.0])
-plt.legend(loc="lower left")
-plt.grid(alpha=0.3)
-plt.show()
-print(f"AUC-PR: {pr_auc:.4f}")
-
-
-# --- Probability Distribution Plot ---
-plt.figure(figsize=(10, 6))
-sns.histplot(y_pred_proba[y_true == 0], color="skyblue", label="Negative Class (0)", kde=True, stat='density', common_norm=False)
-sns.histplot(y_pred_proba[y_true == 1], color="red", label="Positive Class (1)", kde=True, stat='density', common_norm=False)
-plt.axvline(optimal_threshold, color='black', linestyle='--', label=f'Optimal Threshold = {optimal_threshold:.2f}')
-plt.title('Distribution of Predicted Probabilities')
-plt.xlabel('Predicted Probability of Positive Class')
-plt.ylabel('Density')
-plt.legend()
-plt.show()
-
+# You can also plot the PR and ROC curves for this best model on the test set
+# using y_test and y_pred_proba_best as shown in the previous response.
