@@ -1,174 +1,217 @@
-import lightgbm as lgb
-import numpy as np
-import pandas as pd
-from sklearn.model_selection import train_test_split, StratifiedKFold, RandomizedSearchCV
-from sklearn.metrics import make_scorer, average_precision_score, f1_score, roc_auc_score
-from scipy.stats import randint as sp_randint
-from scipy.stats import uniform as sp_uniform
-
-# --- 1. Load or Prepare Your Data ---
-# Assume you have X, y where y is highly imbalanced
-# For demonstration, let's create dummy data
-from sklearn.datasets import make_classification
-X, y = make_classification(n_samples=10000, n_features=20, n_informative=5,
-                           n_redundant=5, n_classes=2, weights=[0.98, 0.02], # Highly imbalanced
-                           flip_y=0.05, random_state=42)
-X = pd.DataFrame(X, columns=[f'feature_{i}' for i in range(X.shape[1])])
-y = pd.Series(y)
-
-# --- 2. Split Data (Stratified) ---
-# Crucial to use stratify for imbalanced datasets
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42, stratify=y)
-
-print(f"Training set shape: {X_train.shape}")
-print(f"Test set shape: {X_test.shape}")
-print(f"Training set positive class proportion: {y_train.mean():.4f}")
-print(f"Test set positive class proportion: {y_test.mean():.4f}")
+python -m vllm.entrypoints.openai.api_server \
+    --model meta-llama/Meta-Llama-3.1-70B-Instruct  \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --tensor-parallel-size <N>  # N = number of GPUs if using multiple
+    # --quantization awq # Optional: if using AWQ quantization
+    # --gpu-memory-utilization 0.9 # Optional: control VRAM usage
+    # Add other args as needed (dtype, max_model_len, etc.)
 
 
-# --- 3. Define Base Model and Calculate scale_pos_weight ---
-# Calculate scale_pos_weight on the *training* data
-neg_count = np.sum(y_train == 0)
-pos_count = np.sum(y_train == 1)
-scale_pos_weight_value = neg_count / pos_count
-print(f"\nCalculated scale_pos_weight for training data: {scale_pos_weight_value:.2f}")
+API Endpoint: http://localhost:8000/v1
 
-# Base LGBM Classifier instance
-# We will set scale_pos_weight here, as it's usually determined by data imbalance ratio
-# rather than tuned randomly in the same way as other hyperparameters.
-# You *could* include it in the search space if you suspect the calculated value isn't optimal.
-base_model = lgb.LGBMClassifier(
-    objective='binary',
-    boosting_type='gbdt',
-    random_state=42,
-    n_jobs=-1,
-    scale_pos_weight=scale_pos_weight_value # Apply the calculated weight
+# --- Inside your LangGraph Python script ---
+from langchain_openai import ChatOpenAI
+
+# --- Configuration ---
+# Example using vLLM default endpoint:
+LOCAL_API_BASE_URL = "http://localhost:8000/v1"
+# Model name as expected by the vLLM server (usually the HF identifier)
+LOCAL_MODEL_NAME = "meta-llama/Meta-Llama-3.1-70B-Instruct"
+# API Key usually not needed for local servers
+LOCAL_API_KEY = "NA"
+
+# --- Inside your call_openai_api node function ---
+chat_model = ChatOpenAI(
+    model=LOCAL_MODEL_NAME,
+    openai_api_base=LOCAL_API_BASE_URL,
+    openai_api_key=LOCAL_API_KEY,
+    temperature=0.6,
+    max_tokens=512,
+    model_kwargs={
+        "logprobs": True,
+        # Add other compatible parameters if needed
+    }
 )
 
-# --- 4. Define Hyperparameter Search Space (Distributions) ---
-# Use distributions from scipy.stats for random search
-param_distributions = {
-    'n_estimators': sp_randint(100, 1500),  # Number of boosting rounds
-    'learning_rate': sp_uniform(0.01, 0.2), # Learning rate (low value means more estimators often needed)
-    'num_leaves': sp_randint(20, 100),      # Max number of leaves in one tree (key tuning parameter)
-    'max_depth': [-1] + list(sp_randint(3, 15).rvs(10)), # Max tree depth, -1 means no limit. Sample some specific depths.
-    'reg_alpha': sp_uniform(0, 1),         # L1 regularization
-    'reg_lambda': sp_uniform(0, 1),        # L2 regularization
-    'colsample_bytree': sp_uniform(0.6, 0.4), # Subsample ratio of columns for each tree (0.6 to 1.0)
-    'subsample': sp_uniform(0.6, 0.4),      # Subsample ratio of the training instance (0.6 to 1.0) - requires boosting_type='gbdt'
-    'min_child_samples': sp_randint(5, 50) # Minimum number of data needed in a child (leaf)
-    # 'scale_pos_weight': sp_uniform(scale_pos_weight_value * 0.5, scale_pos_weight_value * 1.0) # Optionally tune this too
-}
+============
 
-# --- 5. Define Cross-Validation Strategy ---
-# StratifiedKFold is essential for imbalanced datasets
-cv_strategy = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+import torch
+import torch.nn.functional as F
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from langchain_huggingface import ChatHuggingFace # Use the specific Chat wrapper
+from langchain_core.messages import HumanMessage, SystemMessage
 
-# --- 6. Choose Scoring Metric for Optimization ---
-# For imbalanced data, AUC-PR ('average_precision') or F1-score are better than accuracy or ROC AUC.
-# Let's optimize for AUC-PR. You can also use 'f1' or 'f1_macro'/'f1_weighted'.
-# If using 'f1', ensure your positive class is labeled as 1 or specify pos_label.
-scoring_metric = 'average_precision' # Area Under the Precision-Recall Curve
+# --- Load Model and Tokenizer (as before) ---
+model_name = "gpt2" # Replace with your actual model
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForCausalLM.from_pretrained(model_name)
+device = model.device # Or specify 'cuda', 'cpu'
 
-# You can also evaluate multiple metrics during the search
-# scoring = {
-#     'AUC_PR': 'average_precision',
-#     'F1': 'f1',
-#     'ROC_AUC': 'roc_auc'
-# }
-# refit_metric = 'AUC_PR' # Choose which metric determines the 'best' model
+if tokenizer.pad_token is None:
+    tokenizer.pad_token = tokenizer.eos_token
+    model.config.pad_token_id = model.config.eos_token_id
 
-# --- 7. Configure Randomized Search ---
-n_iter_search = 100 # Number of parameter settings that are sampled. Adjust based on time/resources.
-
-random_search = RandomizedSearchCV(
-    estimator=base_model,
-    param_distributions=param_distributions,
-    n_iter=n_iter_search,
-    scoring=scoring_metric, # Or the 'scoring' dictionary
-    # refit=refit_metric, # Use if scoring is a dictionary
-    cv=cv_strategy,
-    random_state=42,
-    n_jobs=-1,  # Use all available cores
-    verbose=2   # Set verbosity level (1 or 2 for progress)
+# --- Instantiate ChatHuggingFace ---
+# Pass generate kwargs via model_kwargs to request scores
+llm = ChatHuggingFace(
+    model=model,
+    tokenizer=tokenizer,
+    model_kwargs={
+        "max_new_tokens": 50,
+        "temperature": 0.7,
+        "do_sample": True,
+        # --- Crucial for Log Probs ---
+        "output_scores": True,
+        "return_dict_in_generate": True,
+    },
+    task="text-generation" # Explicitly setting task can sometimes help
 )
 
-# --- 8. Run the Search ---
-print(f"\nStarting Randomized Search (Optimizing for: {scoring_metric})...")
+# --- Prepare Messages ---
+messages = [
+    SystemMessage(content="You are a helpful assistant."),
+    HumanMessage(content="Explain the concept of log probabilities in LLMs.")
+]
 
-# Optional: Add early stopping *within* the Randomized Search CV fits
-# This can significantly speed up the search by stopping training early for bad hyperparameter sets
-# Note: This requires a compatible version of scikit-learn (>= 0.24) and LightGBM
-fit_params = {
-    "callbacks": [lgb.early_stopping(stopping_rounds=50, verbose=False)]#,
-    # "eval_metric": "aucpr" # Use AUC-PR for early stopping metric - requires LightGBM >= 3.0
-    # "eval_set": [(X_test, y_test)] # Ideally use a validation set *within* each CV fold, not the final test set!
-                                      # RandomizedSearchCV handles the CV splitting internally.
-                                      # Providing eval_set here might overfit to X_test during search.
-                                      # It's generally better to rely on CV score unless you have a separate validation set
-                                      # *per fold* which is complex to set up here.
-                                      # If not using eval_set, early stopping uses the last metric in `metric` param of LGBMClassifier.
-                                      # Since we set `objective='binary'`, default metrics include `binary_logloss`.
-                                      # Let's rely on the CV score optimization for simplicity here.
-}
+# --- Invoke the Model ---
+response = llm.invoke(messages)
 
+# --- Extract Response and Log Probabilities ---
+response_text = response.content
+log_probs_list = []
 
-# random_search.fit(X_train, y_train, **fit_params) # Use this line if you want early stopping
-random_search.fit(X_train, y_train) # Use this line without the early stopping callback
+print(f"Response Text: {response_text}")
 
+# Log probs are usually in response_metadata
+metadata = response.response_metadata
+# print("\nFull Metadata:", metadata) # Uncomment to inspect structure
 
-# --- 9. Get Best Results ---
-print("\n--- Randomized Search Results ---")
-print(f"Best Score ({scoring_metric}): {random_search.best_score_:.4f}")
-print("Best Parameters:")
-# Sort parameters for readability
-best_params_sorted = {k: random_search.best_params_[k] for k in sorted(random_search.best_params_)}
-for param, value in best_params_sorted.items():
-    print(f"  {param}: {value}")
+if metadata and 'scores' in metadata and 'sequences' in metadata:
+    scores = metadata['scores'] # Tuple of logit tensors (batch, vocab_size) per step
+    # Get generated sequence, excluding input tokens
+    # NOTE: Need input length. ChatHuggingFace might not easily expose this.
+    # We might need to re-tokenize the input messages to find the length,
+    # or make assumptions based on the structure.
+    # Let's assume we can get the generated IDs somehow (this is the tricky part with ChatHuggingFace)
+    # Often, the metadata *doesn't* directly contain the raw sequence needed to align scores.
+    # This highlights a limitation of relying solely on ChatHuggingFace metadata for this.
 
-# Get the best estimator refitted on the whole training data
-best_lgbm_model = random_search.best_estimator_
+    # --- Alternative within metadata (Less common but check) ---
+    # Sometimes metadata might contain pre-processed logprobs directly
+    if 'logprobs' in metadata: # Check for a pre-processed key
+         # Process based on the structure provided in metadata['logprobs']
+         # This depends heavily on how ChatHuggingFace populates it.
+         print("Found 'logprobs' key in metadata - structure needs inspection.")
+         # Example hypothetical structure:
+         # if isinstance(metadata['logprobs'], list):
+         #    for item in metadata['logprobs']: # e.g., [{'token': '...', 'logprob': ...}]
+         #       log_probs_list.append((item.get('token'), item.get('logprob')))
 
-# --- 10. Evaluate Best Model on Test Set (using optimal threshold finding) ---
-print("\n--- Evaluating Best Model found by Search on Test Set ---")
+    else:
+        print("\nLog probabilities (scores) found, but aligning them with tokens ")
+        print("using only ChatHuggingFace metadata can be complex.")
+        print("Consider Solution 2 for precise token-level logprob alignment.")
 
-# Get probabilities from the best model
-y_pred_proba_best = best_lgbm_model.predict_proba(X_test)[:, 1]
+else:
+    print("\nScores or sequences not found in response_metadata. Ensure model_kwargs are set correctly.")
 
-# **IMPORTANT:** Now apply the threshold finding logic from the previous response
-# using `y_test` (as y_true) and `y_pred_proba_best`.
-# (Code for threshold finding, plotting curves, calculating final metrics goes here)
-# Example (finding threshold for max F1):
-from sklearn.metrics import precision_recall_curve, f1_score, classification_report, confusion_matrix
-import matplotlib.pyplot as plt
-import seaborn as sns
+# --- Print extracted log probs (if available/processed) ---
+if log_probs_list:
+    print("\nProcessed Log Probabilities:")
+    for token, lp in log_probs_list[:10]: # Print first few
+        print(f"  '{token}': {lp:.4f}")
 
-precision, recall, thresholds_pr = precision_recall_curve(y_test, y_pred_proba_best)
-f1_scores = (2 * precision * recall) / (precision + recall + 1e-9) # Add epsilon
-f1_scores = f1_scores[:-1]
-thresholds_pr = thresholds_pr[:len(f1_scores)]
-
-optimal_idx_f1 = np.argmax(f1_scores)
-optimal_threshold_f1 = thresholds_pr[optimal_idx_f1]
-optimal_f1 = f1_scores[optimal_idx_f1]
-
-print(f"\nOptimal Threshold (Max F1 on Test Set): {optimal_threshold_f1:.4f}")
-print(f"Maximum F1 Score on Test Set: {optimal_f1:.4f}")
-
-# Apply threshold and get final metrics
-y_pred_optimal = (y_pred_proba_best >= optimal_threshold_f1).astype(int)
-
-print("\nConfusion Matrix (Test Set @ Optimal Threshold):")
-cm = confusion_matrix(y_test, y_pred_optimal)
-sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
-plt.title(f'Confusion Matrix (Threshold = {optimal_threshold_f1:.2f})')
-plt.ylabel('Actual')
-plt.xlabel('Predicted')
-plt.show()
+==============
 
 
-print("\nClassification Report (Test Set @ Optimal Threshold):")
-print(classification_report(y_test, y_pred_optimal, target_names=['Negative (0)', 'Positive (1)']))
+import torch
+import torch.nn.functional as F
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage # Can still use for structure
 
-# You can also plot the PR and ROC curves for this best model on the test set
-# using y_test and y_pred_proba_best as shown in the previous response.
+# --- Load Model and Tokenizer (as before) ---
+model_name = "gpt2" # Replace with your actual model
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForCausalLM.from_pretrained(model_name)
+device = model.device
+
+if tokenizer.pad_token is None:
+    tokenizer.pad_token = tokenizer.eos_token
+    model.config.pad_token_id = model.config.eos_token_id
+
+# --- Prepare Messages (using LangChain structure is fine) ---
+messages = [
+    SystemMessage(content="You are a helpful assistant."),
+    HumanMessage(content="Explain the concept of log probabilities in LLMs.")
+]
+
+# --- Manually Apply Chat Template ---
+# Convert LangChain messages to the list of dicts format expected by apply_chat_template
+formatted_messages = [{"role": msg.type if msg.type != 'ai' else 'assistant', "content": msg.content} for msg in messages]
+
+# Tokenize using the chat template
+# add_generation_prompt=True is crucial for instruct/chat models
+input_ids = tokenizer.apply_chat_template(
+    formatted_messages,
+    add_generation_prompt=True,
+    return_tensors="pt"
+).to(device)
+input_length = input_ids.shape[1]
+
+# --- Call model.generate() directly ---
+generation_kwargs = dict(
+    input_ids=input_ids,
+    max_new_tokens=50,
+    temperature=0.7,
+    do_sample=True,
+    # --- Crucial for Log Probs ---
+    output_scores=True,
+    return_dict_in_generate=True,
+)
+
+print("Calling model.generate()...")
+with torch.no_grad():
+    outputs = model.generate(**generation_kwargs)
+
+# --- Process Output and Log Probabilities ---
+# Decode only the newly generated tokens
+generated_ids = outputs.sequences[0, input_length:]
+response_text = tokenizer.decode(generated_ids, skip_special_tokens=True)
+
+print(f"\nResponse Text: {response_text}")
+
+# Extract and calculate log probabilities for chosen tokens
+log_probs_list = []
+if outputs.scores:
+    # scores is a tuple of tensors, one per generated token step
+    # Each tensor has shape (batch_size, vocab_size) with raw logits
+    for i, score_tensor in enumerate(outputs.scores):
+        # Apply log_softmax to get log probabilities
+        log_probs = F.log_softmax(score_tensor, dim=-1) # Shape: (batch_size, vocab_size)
+
+        # Get the ID of the token that was actually chosen at this step
+        # Ensure index 'i' is valid for generated_ids
+        if i < len(generated_ids):
+            generated_token_id = generated_ids[i].item() # Get the token ID as an integer
+
+            # Get the log probability of the chosen token
+            # log_probs[0] because batch_size is 1
+            token_log_prob = log_probs[0, generated_token_id].item() # Get as float
+
+            # Also get the token string for readability
+            token_string = tokenizer.decode([generated_token_id])
+            log_probs_list.append((token_string, generated_token_id, token_log_prob))
+        else:
+            print(f"Warning: Score index {i} out of bounds for generated_ids length {len(generated_ids)}")
+
+
+# --- Print Log Probs ---
+if log_probs_list:
+    print("\nToken Log Probabilities (Token, ID, LogProb):")
+    for token_str, token_id, lp in log_probs_list[:10]: # Print first few
+        print(f"  '{token_str}' ({token_id}): {lp:.4f}")
+else:
+    print("\nCould not extract log probabilities.")
+
+=========
