@@ -1,217 +1,132 @@
-python -m vllm.entrypoints.openai.api_server \
-    --model meta-llama/Meta-Llama-3.1-70B-Instruct  \
-    --host 0.0.0.0 \
-    --port 8000 \
-    --tensor-parallel-size <N>  # N = number of GPUs if using multiple
-    # --quantization awq # Optional: if using AWQ quantization
-    # --gpu-memory-utilization 0.9 # Optional: control VRAM usage
-    # Add other args as needed (dtype, max_model_len, etc.)
+pip install autoawq transformers torch accelerate datasets sentencepiece
 
 
-API Endpoint: http://localhost:8000/v1
 
-# --- Inside your LangGraph Python script ---
-from langchain_openai import ChatOpenAI
+import os
+import torch
+from transformers import AutoTokenizer
+from awq import AutoAWQForCausalLM # Import from awq library directly
+from datasets import load_dataset # Optional: for calibration data
 
 # --- Configuration ---
-# Example using vLLM default endpoint:
-LOCAL_API_BASE_URL = "http://localhost:8000/v1"
-# Model name as expected by the vLLM server (usually the HF identifier)
-LOCAL_MODEL_NAME = "meta-llama/Meta-Llama-3.1-70B-Instruct"
-# API Key usually not needed for local servers
-LOCAL_API_KEY = "NA"
+# 1. Path to your downloaded FP16/BF16 Llama 3.1 70B model
+model_path = "/path/to/your/local/llama-3.1-70b-instruct"
 
-# --- Inside your call_openai_api node function ---
-chat_model = ChatOpenAI(
-    model=LOCAL_MODEL_NAME,
-    openai_api_base=LOCAL_API_BASE_URL,
-    openai_api_key=LOCAL_API_KEY,
-    temperature=0.6,
-    max_tokens=512,
-    model_kwargs={
-        "logprobs": True,
-        # Add other compatible parameters if needed
-    }
-)
+# 2. Path where the quantized model will be saved
+quant_path = "/path/to/save/quantized/llama-3.1-70b-instruct-awq"
 
-============
+# 3. Quantization configuration
+quant_config = {
+    "w_bit": 4,        # Target weight bit-width (4-bit is common)
+    "q_group_size": 128, # Group size for quantization (128 is standard)
+    "zero_point": True,  # Use zero-point quantization (common for AWQ)
+    "version": "GEMM"    # Use GEMM version for general compatibility (alternative: "GEMV")
+}
 
-import torch
-import torch.nn.functional as F
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from langchain_huggingface import ChatHuggingFace # Use the specific Chat wrapper
-from langchain_core.messages import HumanMessage, SystemMessage
+# 4. (Optional but Recommended) Calibration Data Configuration
+use_calibration_data = True
+calibration_dataset_name = "mit-han-lab/pile-val-backup" # A dataset for calibration
+# Alternative: "wikitext", dataset="wikitext-2-raw-v1", split="train"
+# Alternative: "allenai/c4", dataset="realnewslike", split="validation"
+num_calibration_samples = 512 # Number of samples for calibration
+calibration_text_column = "text" # Column containing text in the dataset
 
-# --- Load Model and Tokenizer (as before) ---
-model_name = "gpt2" # Replace with your actual model
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModelForCausalLM.from_pretrained(model_name)
-device = model.device # Or specify 'cuda', 'cpu'
+# --- Safety Check ---
+if not os.path.isdir(model_path):
+    raise FileNotFoundError(f"Original model path not found: {model_path}")
+if os.path.exists(quant_path):
+    print(f"Warning: Quantized model path already exists: {quant_path}")
+    # Consider adding logic here to ask user or delete existing path
 
-if tokenizer.pad_token is None:
-    tokenizer.pad_token = tokenizer.eos_token
-    model.config.pad_token_id = model.config.eos_token_id
+print(f"Loading original model from: {model_path}")
+print("This may take a while and require significant RAM/VRAM...")
 
-# --- Instantiate ChatHuggingFace ---
-# Pass generate kwargs via model_kwargs to request scores
-llm = ChatHuggingFace(
-    model=model,
-    tokenizer=tokenizer,
-    model_kwargs={
-        "max_new_tokens": 50,
-        "temperature": 0.7,
-        "do_sample": True,
-        # --- Crucial for Log Probs ---
-        "output_scores": True,
-        "return_dict_in_generate": True,
-    },
-    task="text-generation" # Explicitly setting task can sometimes help
-)
+# --- Load Model and Tokenizer ---
+# device_map="auto" distributes model across available GPUs/CPU RAM
+# Requires 'accelerate' library
+# Use bfloat16 if supported, otherwise float16 for loading
+dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 
-# --- Prepare Messages ---
-messages = [
-    SystemMessage(content="You are a helpful assistant."),
-    HumanMessage(content="Explain the concept of log probabilities in LLMs.")
-]
+try:
+    # Initialize AutoAWQForCausalLM with the base model path and config
+    # It handles loading the base model internally using transformers
+    model = AutoAWQForCausalLM.from_pretrained(
+        model_path,
+        trust_remote_code=True,
+        safetensors=True, # Prefer SafeTensors format if available
+        device_map="auto", # Crucial for large models
+        torch_dtype=dtype,
+    )
+    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    print("Original model and tokenizer loaded successfully.")
+except Exception as e:
+    print(f"Error loading original model/tokenizer: {e}")
+    print("Ensure the model path is correct and you have enough system resources.")
+    exit(1)
 
-# --- Invoke the Model ---
-response = llm.invoke(messages)
 
-# --- Extract Response and Log Probabilities ---
-response_text = response.content
-log_probs_list = []
-
-print(f"Response Text: {response_text}")
-
-# Log probs are usually in response_metadata
-metadata = response.response_metadata
-# print("\nFull Metadata:", metadata) # Uncomment to inspect structure
-
-if metadata and 'scores' in metadata and 'sequences' in metadata:
-    scores = metadata['scores'] # Tuple of logit tensors (batch, vocab_size) per step
-    # Get generated sequence, excluding input tokens
-    # NOTE: Need input length. ChatHuggingFace might not easily expose this.
-    # We might need to re-tokenize the input messages to find the length,
-    # or make assumptions based on the structure.
-    # Let's assume we can get the generated IDs somehow (this is the tricky part with ChatHuggingFace)
-    # Often, the metadata *doesn't* directly contain the raw sequence needed to align scores.
-    # This highlights a limitation of relying solely on ChatHuggingFace metadata for this.
-
-    # --- Alternative within metadata (Less common but check) ---
-    # Sometimes metadata might contain pre-processed logprobs directly
-    if 'logprobs' in metadata: # Check for a pre-processed key
-         # Process based on the structure provided in metadata['logprobs']
-         # This depends heavily on how ChatHuggingFace populates it.
-         print("Found 'logprobs' key in metadata - structure needs inspection.")
-         # Example hypothetical structure:
-         # if isinstance(metadata['logprobs'], list):
-         #    for item in metadata['logprobs']: # e.g., [{'token': '...', 'logprob': ...}]
-         #       log_probs_list.append((item.get('token'), item.get('logprob')))
-
-    else:
-        print("\nLog probabilities (scores) found, but aligning them with tokens ")
-        print("using only ChatHuggingFace metadata can be complex.")
-        print("Consider Solution 2 for precise token-level logprob alignment.")
-
+# --- Prepare Calibration Data (Optional) ---
+calibration_data = None
+if use_calibration_data:
+    print(f"Loading calibration data from '{calibration_dataset_name}'...")
+    try:
+        dataset = load_dataset(calibration_dataset_name, split="validation", streaming=False) # Load a portion
+        # Shuffle and select samples
+        dataset = dataset.shuffle(seed=42).select(range(num_calibration_samples))
+        # Extract text data - adapt column name if necessary
+        calibration_data = [item[calibration_text_column] for item in dataset]
+        print(f"Loaded {len(calibration_data)} samples for calibration.")
+    except Exception as e:
+        print(f"Warning: Failed to load calibration data: {e}")
+        print("Proceeding without calibration data. Quality might be slightly reduced.")
+        calibration_data = None # Fallback
 else:
-    print("\nScores or sequences not found in response_metadata. Ensure model_kwargs are set correctly.")
-
-# --- Print extracted log probs (if available/processed) ---
-if log_probs_list:
-    print("\nProcessed Log Probabilities:")
-    for token, lp in log_probs_list[:10]: # Print first few
-        print(f"  '{token}': {lp:.4f}")
-
-==============
+    print("Skipping calibration data.")
 
 
-import torch
-import torch.nn.functional as F
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from langchain_core.messages import HumanMessage, SystemMessage, AIMessage # Can still use for structure
+# --- Quantize the Model ---
+print("Starting quantization process...")
+print(f"Quantization config: {quant_config}")
 
-# --- Load Model and Tokenizer (as before) ---
-model_name = "gpt2" # Replace with your actual model
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModelForCausalLM.from_pretrained(model_name)
-device = model.device
-
-if tokenizer.pad_token is None:
-    tokenizer.pad_token = tokenizer.eos_token
-    model.config.pad_token_id = model.config.eos_token_id
-
-# --- Prepare Messages (using LangChain structure is fine) ---
-messages = [
-    SystemMessage(content="You are a helpful assistant."),
-    HumanMessage(content="Explain the concept of log probabilities in LLMs.")
-]
-
-# --- Manually Apply Chat Template ---
-# Convert LangChain messages to the list of dicts format expected by apply_chat_template
-formatted_messages = [{"role": msg.type if msg.type != 'ai' else 'assistant', "content": msg.content} for msg in messages]
-
-# Tokenize using the chat template
-# add_generation_prompt=True is crucial for instruct/chat models
-input_ids = tokenizer.apply_chat_template(
-    formatted_messages,
-    add_generation_prompt=True,
-    return_tensors="pt"
-).to(device)
-input_length = input_ids.shape[1]
-
-# --- Call model.generate() directly ---
-generation_kwargs = dict(
-    input_ids=input_ids,
-    max_new_tokens=50,
-    temperature=0.7,
-    do_sample=True,
-    # --- Crucial for Log Probs ---
-    output_scores=True,
-    return_dict_in_generate=True,
-)
-
-print("Calling model.generate()...")
-with torch.no_grad():
-    outputs = model.generate(**generation_kwargs)
-
-# --- Process Output and Log Probabilities ---
-# Decode only the newly generated tokens
-generated_ids = outputs.sequences[0, input_length:]
-response_text = tokenizer.decode(generated_ids, skip_special_tokens=True)
-
-print(f"\nResponse Text: {response_text}")
-
-# Extract and calculate log probabilities for chosen tokens
-log_probs_list = []
-if outputs.scores:
-    # scores is a tuple of tensors, one per generated token step
-    # Each tensor has shape (batch_size, vocab_size) with raw logits
-    for i, score_tensor in enumerate(outputs.scores):
-        # Apply log_softmax to get log probabilities
-        log_probs = F.log_softmax(score_tensor, dim=-1) # Shape: (batch_size, vocab_size)
-
-        # Get the ID of the token that was actually chosen at this step
-        # Ensure index 'i' is valid for generated_ids
-        if i < len(generated_ids):
-            generated_token_id = generated_ids[i].item() # Get the token ID as an integer
-
-            # Get the log probability of the chosen token
-            # log_probs[0] because batch_size is 1
-            token_log_prob = log_probs[0, generated_token_id].item() # Get as float
-
-            # Also get the token string for readability
-            token_string = tokenizer.decode([generated_token_id])
-            log_probs_list.append((token_string, generated_token_id, token_log_prob))
-        else:
-            print(f"Warning: Score index {i} out of bounds for generated_ids length {len(generated_ids)}")
+try:
+    model.quantize(
+        tokenizer,
+        quant_config=quant_config,
+        calib_data=calibration_data # Pass calibration data if loaded
+    )
+    print("Quantization complete.")
+except Exception as e:
+    print(f"Error during quantization: {e}")
+    exit(1)
 
 
-# --- Print Log Probs ---
-if log_probs_list:
-    print("\nToken Log Probabilities (Token, ID, LogProb):")
-    for token_str, token_id, lp in log_probs_list[:10]: # Print first few
-        print(f"  '{token_str}' ({token_id}): {lp:.4f}")
-else:
-    print("\nCould not extract log probabilities.")
+# --- Save Quantized Model ---
+# The save_quantized method saves the quantized weights,
+# necessary config files (config.json, quantization_config.json), and tokenizer files.
+print(f"Saving quantized model to: {quant_path}")
 
-=========
+try:
+    model.save_quantized(quant_path)
+    # Tokenizer is usually saved automatically, but double-check if needed:
+    # tokenizer.save_pretrained(quant_path)
+    print("Quantized model saved successfully.")
+except Exception as e:
+    print(f"Error saving quantized model: {e}")
+    exit(1)
+
+print("\n--- Process Finished ---")
+print(f"Quantized model (AWQ, 4-bit) saved at: {quant_path}")
+print("You can now use this path with vLLM using '--quantization awq'")
+print("Example vLLM command snippet:")
+print(f"python -m vllm.entrypoints.openai.api_server --model {quant_path} --quantization awq --tensor-parallel-size 8 ...")
+
+
+python -m vllm.entrypoints.openai.api_server \
+    --model /path/to/save/quantized/llama-3.1-70b-instruct-awq \
+    --quantization awq \
+    --tensor-parallel-size 8 `# Or your desired number of GPUs` \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --gpu-memory-utilization 0.9 \
+    --max-model-len 8192 `# Adjust as needed` \
+    --trust-remote-code
