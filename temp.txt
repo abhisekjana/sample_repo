@@ -1,132 +1,214 @@
-pip install autoawq transformers torch accelerate datasets sentencepiece
+# config.py
+"""
+Configuration module for the application.
 
+Loads settings from a JSON file and allows overrides via environment variables.
+Provides a convenient way to access configuration values.
+"""
 
-
+import json
 import os
-import torch
-from transformers import AutoTokenizer
-from awq import AutoAWQForCausalLM # Import from awq library directly
-from datasets import load_dataset # Optional: for calibration data
+import logging
+import sys
+from typing import Any, Optional, Dict
 
-# --- Configuration ---
-# 1. Path to your downloaded FP16/BF16 Llama 3.1 70B model
-model_path = "/path/to/your/local/llama-3.1-70b-instruct"
+log = logging.getLogger(__name__)
 
-# 2. Path where the quantized model will be saved
-quant_path = "/path/to/save/quantized/llama-3.1-70b-instruct-awq"
+# --- Module Level Globals ---
+# Dictionary to hold the loaded configuration settings
+settings: Dict[str, Any] = {}
 
-# 3. Quantization configuration
-quant_config = {
-    "w_bit": 4,        # Target weight bit-width (4-bit is common)
-    "q_group_size": 128, # Group size for quantization (128 is standard)
-    "zero_point": True,  # Use zero-point quantization (common for AWQ)
-    "version": "GEMM"    # Use GEMM version for general compatibility (alternative: "GEMV")
-}
+# Default path for the configuration file
+_DEFAULT_CONFIG_PATH = "config.json"
 
-# 4. (Optional but Recommended) Calibration Data Configuration
-use_calibration_data = True
-calibration_dataset_name = "mit-han-lab/pile-val-backup" # A dataset for calibration
-# Alternative: "wikitext", dataset="wikitext-2-raw-v1", split="train"
-# Alternative: "allenai/c4", dataset="realnewslike", split="validation"
-num_calibration_samples = 512 # Number of samples for calibration
-calibration_text_column = "text" # Column containing text in the dataset
-
-# --- Safety Check ---
-if not os.path.isdir(model_path):
-    raise FileNotFoundError(f"Original model path not found: {model_path}")
-if os.path.exists(quant_path):
-    print(f"Warning: Quantized model path already exists: {quant_path}")
-    # Consider adding logic here to ask user or delete existing path
-
-print(f"Loading original model from: {model_path}")
-print("This may take a while and require significant RAM/VRAM...")
-
-# --- Load Model and Tokenizer ---
-# device_map="auto" distributes model across available GPUs/CPU RAM
-# Requires 'accelerate' library
-# Use bfloat16 if supported, otherwise float16 for loading
-dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-
-try:
-    # Initialize AutoAWQForCausalLM with the base model path and config
-    # It handles loading the base model internally using transformers
-    model = AutoAWQForCausalLM.from_pretrained(
-        model_path,
-        trust_remote_code=True,
-        safetensors=True, # Prefer SafeTensors format if available
-        device_map="auto", # Crucial for large models
-        torch_dtype=dtype,
-    )
-    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-    print("Original model and tokenizer loaded successfully.")
-except Exception as e:
-    print(f"Error loading original model/tokenizer: {e}")
-    print("Ensure the model path is correct and you have enough system resources.")
-    exit(1)
+# Prefix for environment variables used for overrides (to avoid conflicts)
+_ENV_VAR_PREFIX = "APP_"
 
 
-# --- Prepare Calibration Data (Optional) ---
-calibration_data = None
-if use_calibration_data:
-    print(f"Loading calibration data from '{calibration_dataset_name}'...")
+# --- Core Functions ---
+
+def load_config(config_path: Optional[str] = None) -> None:
+    """
+    Loads configuration settings into the global 'settings' dictionary.
+
+    Order of precedence (highest first):
+    1. Environment variables (if defined and prefixed with _ENV_VAR_PREFIX)
+    2. Values from the configuration file.
+
+    Args:
+        config_path: Path to the JSON configuration file. If None, uses
+                     the path from the APP_CONFIG_PATH environment variable,
+                     or falls back to _DEFAULT_CONFIG_PATH.
+
+    Raises:
+        FileNotFoundError: If the specified or default config file doesn't exist
+                           (and isn't overridden by environment variables completely).
+        json.JSONDecodeError: If the config file has invalid JSON.
+        Exception: For other potential loading errors.
+    """
+    global settings
+    settings = {} # Reset settings on each load call (useful for testing)
+
+    # Determine the configuration file path
+    if config_path is None:
+        config_path = os.getenv("APP_CONFIG_PATH", _DEFAULT_CONFIG_PATH)
+
+    log.info(f"Attempting to load configuration from: {config_path}")
+
+    # 1. Load base configuration from JSON file
     try:
-        dataset = load_dataset(calibration_dataset_name, split="validation", streaming=False) # Load a portion
-        # Shuffle and select samples
-        dataset = dataset.shuffle(seed=42).select(range(num_calibration_samples))
-        # Extract text data - adapt column name if necessary
-        calibration_data = [item[calibration_text_column] for item in dataset]
-        print(f"Loaded {len(calibration_data)} samples for calibration.")
+        with open(config_path, 'r', encoding='utf-8') as f:
+            file_settings = json.load(f)
+            if isinstance(file_settings, dict):
+                settings.update(file_settings)
+            else:
+                log.error(f"Config file {config_path} does not contain a valid JSON object.")
+                raise ValueError("Config file must contain a JSON object.")
+        log.info(f"Successfully loaded base configuration from {config_path}")
+    except FileNotFoundError:
+        log.warning(f"Configuration file not found at {config_path}. "
+                    "Proceeding with defaults and environment variables.")
+        # We don't necessarily raise here, as env vars might provide all needed config
+    except json.JSONDecodeError as e:
+        log.error(f"Error decoding JSON from {config_path}: {e}")
+        raise # Re-raise critical error
     except Exception as e:
-        print(f"Warning: Failed to load calibration data: {e}")
-        print("Proceeding without calibration data. Quality might be slightly reduced.")
-        calibration_data = None # Fallback
-else:
-    print("Skipping calibration data.")
+        log.error(f"An unexpected error occurred loading {config_path}: {e}")
+        raise # Re-raise other critical errors
+
+    # 2. Override with environment variables
+    log.info(f"Checking for environment variable overrides with prefix '{_ENV_VAR_PREFIX}'...")
+    _apply_environment_overrides(settings)
+
+    log.debug(f"Final configuration loaded: {settings}") # Careful logging sensitive data
 
 
-# --- Quantize the Model ---
-print("Starting quantization process...")
-print(f"Quantization config: {quant_config}")
+def _apply_environment_overrides(config_dict: Dict[str, Any], prefix: str = _ENV_VAR_PREFIX, current_path: str = "") -> None:
+    """
+    Recursively applies environment variable overrides to the config dictionary.
 
-try:
-    model.quantize(
-        tokenizer,
-        quant_config=quant_config,
-        calib_data=calibration_data # Pass calibration data if loaded
-    )
-    print("Quantization complete.")
-except Exception as e:
-    print(f"Error during quantization: {e}")
-    exit(1)
+    Environment variables are expected in the format:
+    PREFIX_SECTION_SUBSECTION_KEY=value
+    Example: APP_DATABASE_PORT=5433
+    """
+    for key, value in config_dict.items():
+        env_var_path = f"{current_path}{key}".upper()
+        env_var_name = f"{prefix}{env_var_path}"
+
+        env_value = os.getenv(env_var_name)
+
+        if env_value is not None:
+            log.info(f"Overriding '{'.join(filter(None, current_path.split('_') + [key]))}' "
+                     f"with value from environment variable '{env_var_name}'.")
+            # Attempt type conversion based on original value type
+            original_type = type(value)
+            try:
+                if original_type == bool:
+                    # Handle boolean conversion carefully (e.g., 'true', '1', 'yes')
+                    config_dict[key] = env_value.lower() in ('true', '1', 't', 'yes', 'y')
+                elif original_type == int:
+                    config_dict[key] = int(env_value)
+                elif original_type == float:
+                     config_dict[key] = float(env_value)
+                else:
+                    # Assume string if other types or original type is None
+                     config_dict[key] = env_value
+            except ValueError:
+                log.warning(f"Could not convert environment variable {env_var_name}='{env_value}' "
+                            f"to original type {original_type}. Using string value.")
+                config_dict[key] = env_value # Keep as string if conversion fails
+
+        # Recurse into nested dictionaries
+        if isinstance(value, dict):
+            _apply_environment_overrides(value, prefix, f"{env_var_path}_")
 
 
-# --- Save Quantized Model ---
-# The save_quantized method saves the quantized weights,
-# necessary config files (config.json, quantization_config.json), and tokenizer files.
-print(f"Saving quantized model to: {quant_path}")
+def get(key_path: str, default: Any = None) -> Any:
+    """
+    Retrieves a configuration value using a dot-separated key path.
 
-try:
-    model.save_quantized(quant_path)
-    # Tokenizer is usually saved automatically, but double-check if needed:
-    # tokenizer.save_pretrained(quant_path)
-    print("Quantized model saved successfully.")
-except Exception as e:
-    print(f"Error saving quantized model: {e}")
-    exit(1)
+    Args:
+        key_path: The dot-separated path to the setting (e.g., "database.host").
+        default: The value to return if the key path is not found.
 
-print("\n--- Process Finished ---")
-print(f"Quantized model (AWQ, 4-bit) saved at: {quant_path}")
-print("You can now use this path with vLLM using '--quantization awq'")
-print("Example vLLM command snippet:")
-print(f"python -m vllm.entrypoints.openai.api_server --model {quant_path} --quantization awq --tensor-parallel-size 8 ...")
+    Returns:
+        The configuration value or the default.
+    """
+    keys = key_path.split('.')
+    value = settings
+    try:
+        for key in keys:
+            if isinstance(value, dict):
+                value = value[key]
+            else:
+                # Trying to access a key on a non-dictionary value
+                log.warning(f"Config path '{key_path}' attempted to access key '{key}' on non-dict value.")
+                return default
+        return value
+    except KeyError:
+        log.debug(f"Configuration key '{key_path}' not found. Returning default: {default}")
+        return default
+    except Exception as e:
+        log.warning(f"Error accessing configuration key '{key_path}': {e}. Returning default.")
+        return default
+
+# --- Optional: Validation ---
+# You could add a function here using Pydantic or jsonschema to validate
+# the loaded 'settings' against a predefined schema after loading.
+# def validate_config():
+#    ...
 
 
-python -m vllm.entrypoints.openai.api_server \
-    --model /path/to/save/quantized/llama-3.1-70b-instruct-awq \
-    --quantization awq \
-    --tensor-parallel-size 8 `# Or your desired number of GPUs` \
-    --host 0.0.0.0 \
-    --port 8000 \
-    --gpu-memory-utilization 0.9 \
-    --max-model-len 8192 `# Adjust as needed` \
-    --trust-remote-code
+# --- Self-test / Example Usage ---
+if __name__ == "__main__":
+    # Configure basic logging ONLY when running this file directly for testing
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+    print("--- Running Config Module Self-Test ---")
+
+    # Example: Set an environment variable override for testing
+    os.environ[f"{_ENV_VAR_PREFIX}DATABASE_PORT"] = "5499"
+    os.environ[f"{_ENV_VAR_PREFIX}API_TIMEOUT_SECONDS"] = "30.5" # Test float
+    os.environ[f"{_ENV_VAR_PREFIX}FEATURE_FLAGS_NEW_DASHBOARD_ENABLED"] = "True" # Test bool
+    os.environ[f"{_ENV_VAR_PREFIX}NEW_SETTING_FROM_ENV"] = "hello_world" # Test adding new setting
+
+    try:
+        print("\nLoading configuration...")
+        load_config() # Load using default path and env vars
+
+        print("\n--- Accessing Settings ---")
+        print(f"Database Host: {get('database.host', 'N/A')}") # From file
+        print(f"Database Port: {get('database.port', 'N/A')}") # Overridden by env
+        print(f"Database User: {get('database.username')}")    # From file
+        print(f"API Timeout:   {get('api.timeout_seconds')}")  # Overridden (float)
+        print(f"New Dashboard: {get('feature_flags.new_dashboard_enabled')}") # Overridden (bool)
+        print(f"Logging Level: {get('logging.level')}")       # From file
+        print(f"Non-existent Key: {get('security.token', 'DEFAULT_TOKEN')}") # Default value
+        print(f"New Env Setting: {get('new_setting_from_env')}") # Won't be found unless you modify _apply... to add keys
+
+        print("\n--- Raw Settings Dictionary ---")
+        # Be cautious printing raw settings if they contain secrets
+        import pprint
+        pprint.pprint(settings)
+
+        print("\n--- Testing Non-Existent File ---")
+        try:
+             load_config("non_existent_config.json")
+             print("Config loaded (likely using only env vars now)")
+             print(f"Database Port (still from env): {get('database.port', 'N/A')}")
+        except Exception as e:
+            print(f"Caught expected error for non-existent file (if env vars not enough): {e}")
+
+
+    except Exception as e:
+        print(f"\n--- An error occurred during self-test: {e} ---", file=sys.stderr)
+        sys.exit(1)
+
+    finally:
+        # Clean up test environment variables
+        del os.environ[f"{_ENV_VAR_PREFIX}DATABASE_PORT"]
+        del os.environ[f"{_ENV_VAR_PREFIX}API_TIMEOUT_SECONDS"]
+        del os.environ[f"{_ENV_VAR_PREFIX}FEATURE_FLAGS_NEW_DASHBOARD_ENABLED"]
+        del os.environ[f"{_ENV_VAR_PREFIX}NEW_SETTING_FROM_ENV"]
+
+    print("\n--- Config Module Self-Test Complete ---")
