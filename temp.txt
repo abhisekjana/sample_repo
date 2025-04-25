@@ -1,214 +1,30 @@
-# config.py
-"""
-Configuration module for the application.
-
-Loads settings from a JSON file and allows overrides via environment variables.
-Provides a convenient way to access configuration values.
-"""
-
-import json
-import os
-import logging
-import sys
-from typing import Any, Optional, Dict
-
-log = logging.getLogger(__name__)
-
-# --- Module Level Globals ---
-# Dictionary to hold the loaded configuration settings
-settings: Dict[str, Any] = {}
-
-# Default path for the configuration file
-_DEFAULT_CONFIG_PATH = "config.json"
-
-# Prefix for environment variables used for overrides (to avoid conflicts)
-_ENV_VAR_PREFIX = "APP_"
-
-
-# --- Core Functions ---
-
-def load_config(config_path: Optional[str] = None) -> None:
-    """
-    Loads configuration settings into the global 'settings' dictionary.
-
-    Order of precedence (highest first):
-    1. Environment variables (if defined and prefixed with _ENV_VAR_PREFIX)
-    2. Values from the configuration file.
-
-    Args:
-        config_path: Path to the JSON configuration file. If None, uses
-                     the path from the APP_CONFIG_PATH environment variable,
-                     or falls back to _DEFAULT_CONFIG_PATH.
-
-    Raises:
-        FileNotFoundError: If the specified or default config file doesn't exist
-                           (and isn't overridden by environment variables completely).
-        json.JSONDecodeError: If the config file has invalid JSON.
-        Exception: For other potential loading errors.
-    """
-    global settings
-    settings = {} # Reset settings on each load call (useful for testing)
-
-    # Determine the configuration file path
-    if config_path is None:
-        config_path = os.getenv("APP_CONFIG_PATH", _DEFAULT_CONFIG_PATH)
-
-    log.info(f"Attempting to load configuration from: {config_path}")
-
-    # 1. Load base configuration from JSON file
-    try:
-        with open(config_path, 'r', encoding='utf-8') as f:
-            file_settings = json.load(f)
-            if isinstance(file_settings, dict):
-                settings.update(file_settings)
-            else:
-                log.error(f"Config file {config_path} does not contain a valid JSON object.")
-                raise ValueError("Config file must contain a JSON object.")
-        log.info(f"Successfully loaded base configuration from {config_path}")
-    except FileNotFoundError:
-        log.warning(f"Configuration file not found at {config_path}. "
-                    "Proceeding with defaults and environment variables.")
-        # We don't necessarily raise here, as env vars might provide all needed config
-    except json.JSONDecodeError as e:
-        log.error(f"Error decoding JSON from {config_path}: {e}")
-        raise # Re-raise critical error
-    except Exception as e:
-        log.error(f"An unexpected error occurred loading {config_path}: {e}")
-        raise # Re-raise other critical errors
-
-    # 2. Override with environment variables
-    log.info(f"Checking for environment variable overrides with prefix '{_ENV_VAR_PREFIX}'...")
-    _apply_environment_overrides(settings)
-
-    log.debug(f"Final configuration loaded: {settings}") # Careful logging sensitive data
-
-
-def _apply_environment_overrides(config_dict: Dict[str, Any], prefix: str = _ENV_VAR_PREFIX, current_path: str = "") -> None:
-    """
-    Recursively applies environment variable overrides to the config dictionary.
-
-    Environment variables are expected in the format:
-    PREFIX_SECTION_SUBSECTION_KEY=value
-    Example: APP_DATABASE_PORT=5433
-    """
-    for key, value in config_dict.items():
-        env_var_path = f"{current_path}{key}".upper()
-        env_var_name = f"{prefix}{env_var_path}"
-
-        env_value = os.getenv(env_var_name)
-
-        if env_value is not None:
-            log.info(f"Overriding '{'.join(filter(None, current_path.split('_') + [key]))}' "
-                     f"with value from environment variable '{env_var_name}'.")
-            # Attempt type conversion based on original value type
-            original_type = type(value)
-            try:
-                if original_type == bool:
-                    # Handle boolean conversion carefully (e.g., 'true', '1', 'yes')
-                    config_dict[key] = env_value.lower() in ('true', '1', 't', 'yes', 'y')
-                elif original_type == int:
-                    config_dict[key] = int(env_value)
-                elif original_type == float:
-                     config_dict[key] = float(env_value)
-                else:
-                    # Assume string if other types or original type is None
-                     config_dict[key] = env_value
-            except ValueError:
-                log.warning(f"Could not convert environment variable {env_var_name}='{env_value}' "
-                            f"to original type {original_type}. Using string value.")
-                config_dict[key] = env_value # Keep as string if conversion fails
-
-        # Recurse into nested dictionaries
-        if isinstance(value, dict):
-            _apply_environment_overrides(value, prefix, f"{env_var_path}_")
-
-
-def get(key_path: str, default: Any = None) -> Any:
-    """
-    Retrieves a configuration value using a dot-separated key path.
-
-    Args:
-        key_path: The dot-separated path to the setting (e.g., "database.host").
-        default: The value to return if the key path is not found.
-
-    Returns:
-        The configuration value or the default.
-    """
-    keys = key_path.split('.')
-    value = settings
-    try:
-        for key in keys:
-            if isinstance(value, dict):
-                value = value[key]
-            else:
-                # Trying to access a key on a non-dictionary value
-                log.warning(f"Config path '{key_path}' attempted to access key '{key}' on non-dict value.")
-                return default
-        return value
-    except KeyError:
-        log.debug(f"Configuration key '{key_path}' not found. Returning default: {default}")
-        return default
-    except Exception as e:
-        log.warning(f"Error accessing configuration key '{key_path}': {e}. Returning default.")
-        return default
-
-# --- Optional: Validation ---
-# You could add a function here using Pydantic or jsonschema to validate
-# the loaded 'settings' against a predefined schema after loading.
-# def validate_config():
-#    ...
-
-
-# --- Self-test / Example Usage ---
-if __name__ == "__main__":
-    # Configure basic logging ONLY when running this file directly for testing
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-
-    print("--- Running Config Module Self-Test ---")
-
-    # Example: Set an environment variable override for testing
-    os.environ[f"{_ENV_VAR_PREFIX}DATABASE_PORT"] = "5499"
-    os.environ[f"{_ENV_VAR_PREFIX}API_TIMEOUT_SECONDS"] = "30.5" # Test float
-    os.environ[f"{_ENV_VAR_PREFIX}FEATURE_FLAGS_NEW_DASHBOARD_ENABLED"] = "True" # Test bool
-    os.environ[f"{_ENV_VAR_PREFIX}NEW_SETTING_FROM_ENV"] = "hello_world" # Test adding new setting
-
-    try:
-        print("\nLoading configuration...")
-        load_config() # Load using default path and env vars
-
-        print("\n--- Accessing Settings ---")
-        print(f"Database Host: {get('database.host', 'N/A')}") # From file
-        print(f"Database Port: {get('database.port', 'N/A')}") # Overridden by env
-        print(f"Database User: {get('database.username')}")    # From file
-        print(f"API Timeout:   {get('api.timeout_seconds')}")  # Overridden (float)
-        print(f"New Dashboard: {get('feature_flags.new_dashboard_enabled')}") # Overridden (bool)
-        print(f"Logging Level: {get('logging.level')}")       # From file
-        print(f"Non-existent Key: {get('security.token', 'DEFAULT_TOKEN')}") # Default value
-        print(f"New Env Setting: {get('new_setting_from_env')}") # Won't be found unless you modify _apply... to add keys
-
-        print("\n--- Raw Settings Dictionary ---")
-        # Be cautious printing raw settings if they contain secrets
-        import pprint
-        pprint.pprint(settings)
-
-        print("\n--- Testing Non-Existent File ---")
-        try:
-             load_config("non_existent_config.json")
-             print("Config loaded (likely using only env vars now)")
-             print(f"Database Port (still from env): {get('database.port', 'N/A')}")
-        except Exception as e:
-            print(f"Caught expected error for non-existent file (if env vars not enough): {e}")
-
-
-    except Exception as e:
-        print(f"\n--- An error occurred during self-test: {e} ---", file=sys.stderr)
-        sys.exit(1)
-
-    finally:
-        # Clean up test environment variables
-        del os.environ[f"{_ENV_VAR_PREFIX}DATABASE_PORT"]
-        del os.environ[f"{_ENV_VAR_PREFIX}API_TIMEOUT_SECONDS"]
-        del os.environ[f"{_ENV_VAR_PREFIX}FEATURE_FLAGS_NEW_DASHBOARD_ENABLED"]
-        del os.environ[f"{_ENV_VAR_PREFIX}NEW_SETTING_FROM_ENV"]
-
-    print("\n--- Config Module Self-Test Complete ---")
+1. The Challenge: Achieving High Confidence in LLM Extractions
+Context: Our OCR -> LLM pipeline achieves high overall accuracy (95%) for entity extraction from scanned documents.
+Problem: Identifying the remaining ~5% of incorrect extractions is crucial for downstream reliability and preventing propagation of errors. Relying solely on raw LLM outputs (like log probabilities) often falls short.
+Why Raw Scores Are Insufficient:
+LLM log probabilities primarily reflect token-level fluency or likelihood, not necessarily factual correctness or semantic validity within the document context ([Xiong et al., 2024, p.2] note limitations of token-likelihood capturing semantic falsity).
+Simple thresholds on a single metric (e.g., minimum logprob) lack robustness – they can miss errors caused by factors other than low LLM sequence probability (e.g., subtle OCR errors the LLM confidently misinterprets, or confident hallucinations).
+While LLMs may internally "know what they know," simple surface-level scores don't always capture this nuanced self-assessment reliably across diverse scenarios ([Kadavath et al., 2022]).
+2. Our Approach: A Discriminative GBM Model for Confidence Scoring
+Strategy: Instead of relying on a single heuristic, we train a Gradient Boosting Model (GBM) specifically to discriminate between correctly and incorrectly extracted entities.
+Leveraging Diverse Signals: The GBM integrates information from multiple sources:
+LLM Internal State: Log probabilities (min, avg, stddev, distribution shape) – Captures the model's generation confidence/fluency.
+Input Quality: AWS Textract word confidences (min, avg, stddev, distribution) – Assesses the reliability of the input text the LLM processed.
+Document Context: Document Type – Provides high-level context about expected entity types and formats.
+(Future Potential): Easily extensible with image features, layout data, entity type constraints, knowledge base lookups, etc.
+3. Why the GBM Approach is Superior:
+Synergistic Feature Integration: The GBM learns complex interactions between features.
+Example: It can identify risky extractions where the LLM is confident (high logprob) but the underlying OCR quality is poor (low Textract confidence), a scenario missed by logprob thresholds alone.
+It can learn different confidence patterns based on document type.
+Robustness to Varied Error Modes: Errors stem from multiple sources (OCR issues, LLM hallucinations, contextual misunderstandings). A multi-feature model is inherently more capable of capturing these diverse failure patterns than a single-feature heuristic.
+Improved Empirical Performance: Our GBM model demonstrably improves error detection, identifying 60% of incorrect entities in our test set, proving more effective and robust than relying solely on the minimum log probability feature.
+Foundation for Advanced Analysis: This approach aligns with broader uncertainty quantification efforts for LLMs, which recognize the need to analyze multiple facets of model behavior and input quality ([Huang et al., 2024] explore various uncertainty metrics).
+4. Justification: Investing in Reliability
+Overhead vs. Reliability: While the GBM introduces model training, hosting, and maintenance, this is a necessary investment for applications requiring high trustworthiness.
+Limitations of "Model-Free": Simpler, "model-free" approaches based on single metrics (like min logprob) are less adaptable, struggle with complex error patterns, and ultimately provide lower confidence in the extracted entities, limiting their suitability for critical, wider applications ([Kadavath et al., 2022] implies richer information exists; [Xiong et al., 2024] & [Huang et al., 2024] highlight complexity and limitations of simple metrics). The robustness gained by the GBM justifies the operational overhead.
+References:
+[Kadavath et al., 2022] Kadavath, S., et al. "Language Models (Mostly) Know What They Know." arXiv:2207.05221. (Supports: LLMs have internal knowledge states, but simple scores may not capture them; need for better evaluation than raw scores).
+[Xiong et al., 2024] Xiong, M., et al. "Can LLMs Express Their Uncertainty? An Empirical Evaluation of Confidence Elicitation in LLMs." ICLR 2024. (Supports: Limitations of token-likelihoods for semantic correctness; complexity of confidence elicitation).
+[Huang et al., 2024] Huang, Y., et al. "Look Before You Leap: An Exploratory Study of Uncertainty Analysis for Large Language Models." IEEE Transactions on Software Engineering (preprint). (Supports: General approach of using uncertainty analysis for risk assessment; implies value in combining multiple metrics).
+(Optional - General ML Principle): Could add a conceptual reference to a standard ML text highlighting the benefits of feature engineering and ensemble/boosting methods for capturing complex interactions and improving robustness over simple linear models or heuristics.
+This slide structure logically builds the case: it starts with the problem (need for reliable confidence beyond basic scores), presents the GBM as a solution that integrates multiple signals, explains why this integration leads to superior performance and robustness (citing evidence and papers), and addresses the counter-argument (overhead) by framing it as a necessary cost for reliability.
