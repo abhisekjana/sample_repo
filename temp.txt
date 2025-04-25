@@ -1,30 +1,141 @@
-1. The Challenge: Achieving High Confidence in LLM Extractions
-Context: Our OCR -> LLM pipeline achieves high overall accuracy (95%) for entity extraction from scanned documents.
-Problem: Identifying the remaining ~5% of incorrect extractions is crucial for downstream reliability and preventing propagation of errors. Relying solely on raw LLM outputs (like log probabilities) often falls short.
-Why Raw Scores Are Insufficient:
-LLM log probabilities primarily reflect token-level fluency or likelihood, not necessarily factual correctness or semantic validity within the document context ([Xiong et al., 2024, p.2] note limitations of token-likelihood capturing semantic falsity).
-Simple thresholds on a single metric (e.g., minimum logprob) lack robustness – they can miss errors caused by factors other than low LLM sequence probability (e.g., subtle OCR errors the LLM confidently misinterprets, or confident hallucinations).
-While LLMs may internally "know what they know," simple surface-level scores don't always capture this nuanced self-assessment reliably across diverse scenarios ([Kadavath et al., 2022]).
-2. Our Approach: A Discriminative GBM Model for Confidence Scoring
-Strategy: Instead of relying on a single heuristic, we train a Gradient Boosting Model (GBM) specifically to discriminate between correctly and incorrectly extracted entities.
-Leveraging Diverse Signals: The GBM integrates information from multiple sources:
-LLM Internal State: Log probabilities (min, avg, stddev, distribution shape) – Captures the model's generation confidence/fluency.
-Input Quality: AWS Textract word confidences (min, avg, stddev, distribution) – Assesses the reliability of the input text the LLM processed.
-Document Context: Document Type – Provides high-level context about expected entity types and formats.
-(Future Potential): Easily extensible with image features, layout data, entity type constraints, knowledge base lookups, etc.
-3. Why the GBM Approach is Superior:
-Synergistic Feature Integration: The GBM learns complex interactions between features.
-Example: It can identify risky extractions where the LLM is confident (high logprob) but the underlying OCR quality is poor (low Textract confidence), a scenario missed by logprob thresholds alone.
-It can learn different confidence patterns based on document type.
-Robustness to Varied Error Modes: Errors stem from multiple sources (OCR issues, LLM hallucinations, contextual misunderstandings). A multi-feature model is inherently more capable of capturing these diverse failure patterns than a single-feature heuristic.
-Improved Empirical Performance: Our GBM model demonstrably improves error detection, identifying 60% of incorrect entities in our test set, proving more effective and robust than relying solely on the minimum log probability feature.
-Foundation for Advanced Analysis: This approach aligns with broader uncertainty quantification efforts for LLMs, which recognize the need to analyze multiple facets of model behavior and input quality ([Huang et al., 2024] explore various uncertainty metrics).
-4. Justification: Investing in Reliability
-Overhead vs. Reliability: While the GBM introduces model training, hosting, and maintenance, this is a necessary investment for applications requiring high trustworthiness.
-Limitations of "Model-Free": Simpler, "model-free" approaches based on single metrics (like min logprob) are less adaptable, struggle with complex error patterns, and ultimately provide lower confidence in the extracted entities, limiting their suitability for critical, wider applications ([Kadavath et al., 2022] implies richer information exists; [Xiong et al., 2024] & [Huang et al., 2024] highlight complexity and limitations of simple metrics). The robustness gained by the GBM justifies the operational overhead.
-References:
-[Kadavath et al., 2022] Kadavath, S., et al. "Language Models (Mostly) Know What They Know." arXiv:2207.05221. (Supports: LLMs have internal knowledge states, but simple scores may not capture them; need for better evaluation than raw scores).
-[Xiong et al., 2024] Xiong, M., et al. "Can LLMs Express Their Uncertainty? An Empirical Evaluation of Confidence Elicitation in LLMs." ICLR 2024. (Supports: Limitations of token-likelihoods for semantic correctness; complexity of confidence elicitation).
-[Huang et al., 2024] Huang, Y., et al. "Look Before You Leap: An Exploratory Study of Uncertainty Analysis for Large Language Models." IEEE Transactions on Software Engineering (preprint). (Supports: General approach of using uncertainty analysis for risk assessment; implies value in combining multiple metrics).
-(Optional - General ML Principle): Could add a conceptual reference to a standard ML text highlighting the benefits of feature engineering and ensemble/boosting methods for capturing complex interactions and improving robustness over simple linear models or heuristics.
-This slide structure logically builds the case: it starts with the problem (need for reliable confidence beyond basic scores), presents the GBM as a solution that integrates multiple signals, explains why this integration leads to superior performance and robustness (citing evidence and papers), and addresses the counter-argument (overhead) by framing it as a necessary cost for reliability.
+import pandas as pd
+import math
+import numpy as np
+
+# --- Assume adaptive_mixture_score is defined as before ---
+def adaptive_mixture_score(
+    llm_confidence: float, # Expects NORMALIZED input (0-1)
+    ocr_quality: float,    # Expects NORMALIZED input (0-1)
+    lambda_threshold: float,
+    k_steepness: float,
+    entity_factor: float = 1.0
+) -> float:
+    """Calculates adaptive score using NORMALIZED inputs."""
+    if k_steepness <= 0:
+        raise ValueError("k_steepness must be positive.")
+
+    exponent_term = k_steepness * (lambda_threshold - llm_confidence)
+    try:
+        alpha = 1.0 / (1.0 + np.exp(exponent_term))
+    except OverflowError:
+        if exponent_term > 700: alpha = 0.0
+        elif exponent_term < -700: alpha = 1.0
+        else: raise
+
+    effective_ocr_quality = entity_factor * ocr_quality
+    score = alpha * llm_confidence + (1.0 - alpha) * effective_ocr_quality
+    # Returns a NORMALIZED score
+    return score
+# -------------------------------------------------------------
+
+def normalize_score(score):
+    """Normalizes a score from 1-100 range to 0-1 range."""
+    # Handle potential non-numeric or NaN values gracefully
+    if pd.isna(score) or not isinstance(score, (int, float)):
+        return np.nan # Or handle error as appropriate
+    return (max(1.0, min(100.0, score)) - 1.0) / 99.0 # Clip score to 1-100 first
+
+def denormalize_score(norm_score):
+    """Converts a normalized 0-1 score back to 1-100 range."""
+    if pd.isna(norm_score):
+        return np.nan
+    return norm_score * 99.0 + 1.0
+
+def apply_adaptive_score_to_dataframe_normalized(
+    df: pd.DataFrame,
+    ocr_col_name: str,         # Column with 1-100 score
+    llm_col_name: str,         # Column with 1-100 score
+    output_col_name: str,
+    lambda_threshold: float,   # Threshold for NORMALIZED LLM score (0-1)
+    k_steepness: float,        # Steepness (positive)
+    entity_factor: float = 1.0,
+    output_denormalized: bool = True, # Option to get 1-100 output
+    inplace: bool = False
+) -> pd.DataFrame:
+    """
+    Applies adaptive_mixture_score row-wise to a DataFrame, handling
+    1-100 input normalization.
+
+    Args:
+        df: Input DataFrame.
+        ocr_col_name: Name of the column with 1-100 OCR scores.
+        llm_col_name: Name of the column with 1-100 LLM scores.
+        output_col_name: Name for the new score column.
+        lambda_threshold: Threshold for NORMALIZED LLM score (e.g., 0.1).
+        k_steepness: Steepness (e.g., 30.0).
+        entity_factor: Optional factor for OCR quality.
+        output_denormalized: If True, the output column will be scaled back to 1-100.
+                             If False, it will be the normalized 0-1 score.
+        inplace: Modify DataFrame directly or return a copy.
+
+    Returns:
+        DataFrame with the new adaptive score column.
+    """
+    if not inplace:
+        df = df.copy()
+
+    # --- Input Validation (simplified for example) ---
+    if ocr_col_name not in df.columns or llm_col_name not in df.columns:
+        raise KeyError("Input columns not found.")
+    if k_steepness <= 0:
+        raise ValueError("k_steepness must be positive.")
+    # Add more robust type/NaN checks if needed
+    # ---------------------------------------------
+
+    print(f"Applying adaptive score: LLM='{llm_col_name}', OCR='{ocr_col_name}' -> '{output_col_name}'")
+    print(f"Using NORM lambda={lambda_threshold}, k={k_steepness}, entity_factor={entity_factor}")
+
+    # Apply row-wise, including normalization inside the lambda
+    calculated_scores = df.apply(
+        lambda row: adaptive_mixture_score(
+            llm_confidence=normalize_score(row[llm_col_name]),
+            ocr_quality=normalize_score(row[ocr_col_name]),
+            lambda_threshold=lambda_threshold,
+            k_steepness=k_steepness,
+            entity_factor=entity_factor
+        ),
+        axis=1
+    )
+
+    if output_denormalized:
+        df[output_col_name] = calculated_scores.apply(denormalize_score)
+        print("Output score denormalized to 1-100 range.")
+    else:
+        df[output_col_name] = calculated_scores
+        print("Output score remains in normalized 0-1 range.")
+
+
+    print("Calculation complete.")
+    return df
+
+# --- Example Usage ---
+
+# Sample DataFrame with 1-100 scores
+data = {
+    'aws_ocr_mean_conf': [95, 80, 99, 30, 90, 5], # OCR 1-100
+    'llm_log_prob_score': [98, 50, 90, 95, 10, 90]  # LLM 1-100
+}
+my_df = pd.DataFrame(data)
+
+# Suggested Parameters for Low OCR Weight
+LAMBDA_PARAM = 0.1 # Low threshold on normalized LLM score
+K_PARAM = 30.0     # High steepness
+
+OUTPUT_COLUMN = 'LowOCRWeight_Score'
+
+try:
+    updated_df = apply_adaptive_score_to_dataframe_normalized(
+        df=my_df,
+        ocr_col_name='aws_ocr_mean_conf',
+        llm_col_name='llm_log_prob_score',
+        output_col_name=OUTPUT_COLUMN,
+        lambda_threshold=LAMBDA_PARAM,
+        k_steepness=K_PARAM,
+        output_denormalized=True # Get output back in 1-100 scale
+    )
+
+    print("\nDataFrame with Low OCR Weight Score (1-100):")
+    print(updated_df)
+
+except (KeyError, TypeError, ValueError) as e:
+    print(f"\nError processing DataFrame: {e}")
