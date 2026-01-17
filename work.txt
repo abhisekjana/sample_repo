@@ -1,1 +1,42 @@
-N/A
+# Getting Started with Accelerated Computing in Modern CUDA C++
+
+Learn how to write, compile, and run GPU-accelerated code, leverage CUDA core libraries to harness the power of massive parallelism provided by modern GPU accelerators, optimize memory migration between CPU and GPU, and implement your own algorithms.
+
+## About this Course
+
+This course provides a comprehensive introduction to general-purpose GPU programming with CUDA. You'll learn how to write, compile, and run GPU-accelerated code, leverage CUDA core libraries to harness the power of massive parallelism provided by modern GPU accelerators, optimize memory migration between CPU and GPU, and implement your own algorithms. At the end of the course, you'll have access to additional resources to create your own GPU-accelerated applications.
+
+## Learning Objectives
+
+At the conclusion of the course, you'll have an understanding of the fundamental concepts and techniques for accelerating C++ code with CUDA and be able to:
+
+- Write and compile code that runs on the GPU
+- Optimize memory migration between CPU and GPU
+- Leverage powerful parallel algorithms that simplify adding GPU acceleration to your code
+- Implement your own parallel algorithms by directly programming GPUs with CUDA kernels
+- Utilize concurrent CUDA streams to overlap memory traffic with compute
+- Know where, when, and how to best add CUDA acceleration to existing CPU-only applications
+
+## Topics Covered
+
+The following topics are covered in this course:
+
+- [CUDA C++](https://developer.nvidia.com/cuda-zone)
+- [Nsight Systems](https://developer.nvidia.com/nsight-systems)
+
+## Course Outline
+
+| **Introduction**                                             |                                                              |
+| ------------------------------------------------------------ | ------------------------------------------------------------ |
+| **CUDA Made Easy: Accelerating Applications with Parallel Algorithms** | To make your first steps in GPU programming as easy as possible, this lab teaches you how to leverage powerful parallel algorithms that make GPU acceleration of your code as easy as changing a few lines of code. While doing so, you’ll learn fundamental concepts such as execution space and memory space, parallelism, heterogeneous computing, and kernel fusion. These concepts will serve as a foundation for your advancement in accelerated computing. By the time you complete this lab, you will be able to:Write, compile, and run GPU codeRefactor standard algorithms to execute on GPUExtend standard algorithms to fit your unique use cases |
+| **Unlocking the GPU’s Full Potential: Harnessing Asynchrony with CUDA Streams** | In the previous lab, you learned how to use parallel algorithms. However, But the concept of parallelism is not sufficient for accelerating your applications. To fully utilize GPUs, this lab will teach you another fundamental concept: asynchrony. In this lab, you'll learn how and when to leverage asynchrony. You’ll use Nsight Systems to distinguish synchronous and asynchronous algorithms and identify performance bottlenecks. By the time you complete this lab, you will be able to:Use CUDA streams to overlap execution and memory transfersUse CUDA events for asynchronous dependency managementProfile CUDA code with NVIDIA Nsight Systems |
+| **Implementing New Algorithms with CUDA Kernels**            | Previous labs equipped you with necessary understanding of how using standard parallel algorithms can provide both convenient and speed-of-light GPU acceleration. However, sometimes your unique use cases are not covered by accelerated libraries. In this lab, you’ll learn the CUDA SIMT programming model to program the GPU directly using CUDA kernels. Besides that, this lab will cover utilities provided by the CUDA ecosystem to facilitate development of custom CUDA kernels. By the time you complete this lab, you will be able to:Write and launch custom CUDA kernelsControl thread hierarchyLeverage shared memoryUse cooperative algorithms |
+
+- [How to Implement Performance Metrics in CUDA C++](https://developer.nvidia.com/blog/how-implement-performance-metrics-cuda-cc/)
+- [How to Query Device Properties and Handle Errors in CUDA C++](https://developer.nvidia.com/blog/how-query-device-properties-and-handle-errors-cuda-cc/)
+- [How to Optimize Data Transfers in CUDA C++](https://developer.nvidia.com/blog/how-optimize-data-transfers-cuda-cc/)
+- [How to Overlap Data Transfers in CUDA C++](https://developer.nvidia.com/blog/how-overlap-data-transfers-cuda-cc/)
+- [How to Access Global Memory Efficiently in CUDA C++](https://developer.nvidia.com/blog/how-access-global-memory-efficiently-cuda-c-kernels/)
+- [Using Shared Memory in CUDA C++](https://developer.nvidia.com/blog/using-shared-memory-cuda-cc/)
+- [An Efficient Matrix Transpose in CUDA C++](https://developer.nvidia.com/blog/efficient-matrix-transpose-cuda-cc/)
+
